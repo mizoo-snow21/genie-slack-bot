@@ -1,0 +1,6 @@
+resources:
+  apps:
+    genie_slack_bot:
+      name: genie-slack-bot-${bundle.target}
+      description: "Slack bot that connects to Databricks Genie Space for natural language data analysis"
+      source_code_path: ../src/app

@@ -1,0 +1,19 @@
+# Databricks Asset Bundles
+.databricks/
+
+# App secrets (edit app.yaml.example → app.yaml with your tokens)
+src/app/app.yaml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local env / secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
