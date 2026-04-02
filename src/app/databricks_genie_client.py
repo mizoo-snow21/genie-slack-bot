@@ -122,63 +122,6 @@ class DatabricksGenieClient:
         logger.info(f"Retrieved statement result for {statement_id}")
         return resp["data"]
 
-    def wait_for_statement(
-        self,
-        statement_id: str,
-        max_wait_time: int = 60,
-    ) -> Optional[Dict[str, Any]]:
-        """Poll a SQL statement until completion. Returns the full statement
-        response on success, None on timeout or failure."""
-        start_time = time.time()
-        attempt = 0
-
-        while time.time() - start_time < max_wait_time:
-            result = self.get_statement_result(statement_id)
-
-            if result:
-                state = result.get("status", {}).get("state")
-                if state == "SUCCEEDED":
-                    logger.info(f"Statement {statement_id} succeeded")
-                    return result
-                elif state in ("FAILED", "CANCELED", "CLOSED"):
-                    logger.error(f"Statement {statement_id} ended with state: {state}")
-                    return result
-
-            sleep_seconds = min(1 * (2 ** attempt), 10)
-            time.sleep(sleep_seconds)
-            attempt += 1
-
-        logger.warning(f"Timeout waiting for statement {statement_id}")
-        return None
-
-    def execute_corrected_query(
-        self,
-        conversation_id: str,
-        message_id: str,
-        query: str,
-    ) -> Optional[str]:
-        """Execute a corrected SQL query via Genie's execute-query endpoint.
-        Returns statement_id on success, None on failure."""
-        path = (
-            f"/api/2.0/genie/spaces/{self.space_id}"
-            f"/conversations/{conversation_id}"
-            f"/messages/{message_id}/execute-query"
-        )
-        resp = self._make_request("POST", path, data={"query": query})
-
-        if not resp["ok"]:
-            return None
-
-        result = resp["data"]
-        statement_id = (
-            result.get("statement_response", {}).get("statement_id")
-        )
-
-        if statement_id:
-            logger.info(f"Corrected query submitted: statement {statement_id}")
-
-        return statement_id
-
     def ask_question(self, question: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
         """High-level method to ask a question and get the response."""
         message_result = self.send_message(conversation_id, question)
