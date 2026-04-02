@@ -136,8 +136,6 @@ env:
     value: "3000"
   - name: LOG_LEVEL
     value: "INFO"
-  - name: SQL_CORRECTION_ALLOWED_USERS
-    value: ""                 # SQL 修正を許可する Slack User ID（カンマ区切り）
 ```
 
 ### Step 8: Databricks CLI の認証
@@ -240,11 +238,10 @@ LLM（Foundation Model API）がユーザーの質問とクエリ結果を分析
 | ヒストグラム | 数値の分布 |
 | 2軸グラフ | スケールが異なる2指標の比較 |
 
-### フィードバックと SQL 修正
+### フィードバック
 
 - **Helpful** ボタン → Genie Space に POSITIVE フィードバックが送信される
 - **Not Helpful** ボタン → Genie Space に NEGATIVE フィードバックが送信される
-- `SQL_CORRECTION_ALLOWED_USERS` に登録されたユーザーが **Not Helpful** を押すと、SQL 修正モーダルが開く。修正 SQL を入力して実行し、結果をスレッドに表示できる
 
 ---
 
