@@ -23,6 +23,10 @@ class Config:
     # App Configuration
     PORT = int(os.getenv("PORT", "3000"))
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    _allowed_users_raw = os.getenv("SQL_CORRECTION_ALLOWED_USERS", "")
+    SQL_CORRECTION_ALLOWED_USERS: set = {
+        u.strip() for u in _allowed_users_raw.split(",") if u.strip()
+    }
 
     @classmethod
     def validate(cls):

@@ -9,6 +9,12 @@ __pycache__/
 *.pyc
 .venv/
 
+# Dependencies (uv.lock removed — using requirements.txt with pip)
+src/app/uv.lock
+
+# Superpowers plans/specs (working docs, not part of the app)
+docs/superpowers/
+
 # Local env / secrets
 .env
 .env.*
