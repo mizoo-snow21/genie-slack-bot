@@ -7,27 +7,28 @@ Databricks Apps 上で動作し、Socket Mode で Slack に接続する。
 
 - **自然言語でデータ分析** — Slack の DM やチャンネルから Genie Space に質問。SQL を自動生成・実行し、結果をテーブルとグラフで返す
 - **スレッドで会話継続** — 同じスレッド内でフォローアップ質問が可能（Genie の conversation を維持）
-- **自動グラフ生成** — クエリ結果を Plotly で可視化し、棒グラフ・折れ線・円グラフ・散布図を自動選択して画像送信
+- **LLM 駆動のグラフ自動生成** — Foundation Model API がデータと質問の意図から最適なグラフ種別を判断し、seaborn/matplotlib で描画
 - **フォローアップ質問の提案** — Genie が返す suggested questions を表示
 - **フィードバック機能** — Helpful / Not Helpful ボタンで Genie API にフィードバック送信
 
-<img width="955" height="1345" alt="image" src="https://github.com/user-attachments/assets/7c723d86-1409-4caa-9d27-600b70871e0e" />
-
+![Demo](docs/demo.gif)
 
 ## アーキテクチャ
 
 ```
 Slack ──(Socket Mode)──> Databricks App ──(Genie API)──> Genie Space ──(SQL)──> SQL Warehouse
                               │
-                              └── Plotly でグラフ画像生成 → Slack にアップロード
+                              ├── Foundation Model API でグラフ仕様を決定
+                              └── seaborn/matplotlib でグラフ画像生成 → Slack にアップロード
 ```
 
 | コンポーネント | 役割 |
 |---|---|
-| Slack Bot (`slack-bolt`) | Socket Mode でメッセージ受信・送信・フィードバック処理 |
+| Slack Bot (`slack-bolt`) | Socket Mode でメッセージ受信・送信・フィードバック・モーダル処理 |
 | Databricks App | サービスプリンシパルの OAuth M2M 認証で Genie API を呼び出し |
 | Genie Space | 自然言語 → SQL 変換、Unity Catalog テーブルへのクエリ実行 |
-| Plotly + kaleido | クエリ結果からグラフ画像を自動生成 |
+| Foundation Model API | クエリ結果からグラフ仕様（種別・軸・色分け）を JSON で生成 |
+| seaborn + japanize-matplotlib | グラフ仕様に基づいて PNG 画像を描画（日本語対応） |
 
 ## ファイル構成
 
@@ -41,10 +42,10 @@ genie-slack-bot/
 │   ├── app.yaml.example        # Databricks Apps 設定テンプレート（※ app.yaml は git 管理外）
 │   ├── config.py               # 環境変数の読み込み・バリデーション
 │   ├── databricks_genie_client.py  # Genie API クライアント
-│   ├── slack_bot.py            # Slack Bot（イベント処理・レスポンス整形・グラフ送信）
-│   ├── chart_generator.py      # Plotly によるグラフ自動生成
-│   ├── pyproject.toml          # 依存管理（uv）
-│   └── uv.lock                 # ロックファイル
+│   ├── slack_bot.py            # Slack Bot（イベント処理・モーダル・レスポンス整形・グラフ送信）
+│   ├── chart_generator.py      # LLM チャート仕様決定 + seaborn 描画
+│   ├── pyproject.toml          # 依存管理（uv 用、ブロック解除後に uv lock で使用）
+│   └── requirements.txt        # 依存管理（pip 用、デプロイで使用）
 ├── README.md
 └── .gitignore
 ```
@@ -135,6 +136,8 @@ env:
     value: "3000"
   - name: LOG_LEVEL
     value: "INFO"
+  - name: SQL_CORRECTION_ALLOWED_USERS
+    value: ""                 # SQL 修正を許可する Slack User ID（カンマ区切り）
 ```
 
 ### Step 8: Databricks CLI の認証
@@ -158,18 +161,20 @@ databricks bundle validate
 # 2. デプロイ
 databricks bundle deploy
 
-# 3. アプリ起動
+# 3. app.yaml をワークスペースにアップロード（.gitignore で除外されているため手動）
+databricks workspace import "<source_code_path>/app.yaml" --file src/app/app.yaml --format AUTO --overwrite
+
+# 4. アプリ起動
 databricks bundle run genie_slack_bot
 ```
 
-> **ターゲット指定**: prod 環境にデプロイする場合は `-t prod` を付与（例: `databricks bundle deploy -t prod`）
+> **ターゲット指定**: prod 環境にデプロイする場合は `-t prod` を付与
 
 ### Step 10: サービスプリンシパルに権限を付与
 
 アプリ作成時にサービスプリンシパルが自動生成されます。その Client ID を確認:
 
 ```bash
-# dev ターゲットの場合、アプリ名は genie-slack-bot-dev
 databricks apps get genie-slack-bot-dev
 # → service_principal_client_id の値を控える
 ```
@@ -192,9 +197,6 @@ databricks api patch /api/2.0/permissions/warehouses/$WAREHOUSE_ID \
 # (c) Unity Catalog テーブル: SELECT（SQL または UI から付与）
 # GRANT SELECT ON TABLE <catalog>.<schema>.<table> TO `<sp_client_id>`;
 ```
-
-> **Warehouse ID の確認方法**: Genie Space の Settings に使用中の Warehouse が表示されています。
-> または `databricks warehouses list` で一覧を確認できます。
 
 ### Step 11: 動作確認
 
@@ -220,15 +222,29 @@ Starting to receive messages from a new connection
 | **スレッドで深掘り** | 回答のスレッドに `前四半期と比較して` と続ける |
 | **フィードバック** | 回答後に表示される **Helpful** / **Not Helpful** ボタンをクリック |
 
-### グラフの自動生成ルール
+### グラフの自動生成
 
-| データの形 | グラフ種別 |
+LLM（Foundation Model API）がユーザーの質問とクエリ結果を分析し、最適なグラフ種別を自動選択します。
+
+| グラフ種別 | 選択される場面 |
 |---|---|
-| 日付列 + 数値列 | 折れ線グラフ |
-| カテゴリ列 + 数値列（2〜8行） | ドーナツチャート |
-| カテゴリ列 + 数値列（9行以上 or ラベルが長い） | 横棒グラフ |
-| カテゴリ列 + 数値列（その他） | 縦棒グラフ |
-| 数値列 x 2（カテゴリなし） | 散布図 |
+| 縦棒グラフ | ランキング・比較（12件以下） |
+| 横棒グラフ | ランキング・比較（13件以上 or 長いラベル） |
+| 折れ線グラフ | 時系列の推移 |
+| 複数折れ線 | カテゴリ別の時系列推移 |
+| 面グラフ | 累計・ボリュームの推移 |
+| ドーナツチャート | シェア・構成比・割合 |
+| 積み上げ棒グラフ | カテゴリ別の内訳比較 |
+| グループ化棒グラフ | 同スケールの複数指標比較 |
+| 散布図 | 2つの数値の相関 |
+| ヒストグラム | 数値の分布 |
+| 2軸グラフ | スケールが異なる2指標の比較 |
+
+### フィードバックと SQL 修正
+
+- **Helpful** ボタン → Genie Space に POSITIVE フィードバックが送信される
+- **Not Helpful** ボタン → Genie Space に NEGATIVE フィードバックが送信される
+- `SQL_CORRECTION_ALLOWED_USERS` に登録されたユーザーが **Not Helpful** を押すと、SQL 修正モーダルが開く。修正 SQL を入力して実行し、結果をスレッドに表示できる
 
 ---
 
@@ -248,24 +264,22 @@ databricks bundle run genie_slack_bot
 | 症状 | 原因と対処 |
 |---|---|
 | `invalid_auth` エラー | Slack トークンが無効。Slack App の OAuth & Permissions で再インストールし、新しいトークンで `app.yaml` を更新 |
-| `Kaleido requires Chrome` | kaleido のバージョンが v1 系。`pyproject.toml` で `kaleido==0.2.1` を指定してロックファイルを再生成 |
 | Genie API timeout | SQL Warehouse が停止中の可能性。Warehouse を起動してから再試行 |
 | グラフが表示されない | Slack App に `files:write` スコープが未追加。追加後に Reinstall to Workspace が必要 |
-| フィードバックボタンが反応しない | App の再起動後は会話マッピングがリセットされる。新しい質問をしてから再度試す |
+| グラフにタイトル/ラベルがない | japanize-matplotlib が未インストール。`requirements.txt` に記載されているか確認 |
 | `App Not Available` とブラウザに表示 | 正常動作。このアプリはバックエンドサービスのため UI はない |
 
 ---
 
 ## 制限事項
 
-- 会話マッピング（スレッド ↔ Genie conversation）はインメモリ管理のため、アプリ再起動で消失する。本番運用では Lakebase 等で永続化を推奨
-- Databricks Apps のデフォルトスペック（2 vCPU, 6 GB RAM）で動作。大量の同時利用には向かない
-- グラフ生成は数値列が少なくとも 1 列、2 行以上のデータが必要
+- 会話マッピング（スレッド ↔ Genie conversation）はインメモリ管理のため、アプリ再起動で消失する
+- Genie API のフィードバックは rating（POSITIVE/NEGATIVE）のみ保存可能。テキストコメントは未サポート
+- グラフ生成は Foundation Model API（`databricks-gpt-5-4-nano`）を使用するため、エンドポイントが利用可能であること
 
 ## 参考
 
-- [Integrate Slack with Genie Natively](https://www.databricksters.com/p/integrate-slack-with-genie-natively) — 元ブログ記事
 - [Databricks Apps Docs](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/)
-- [Databricks Apps Dependencies](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/dependencies) — uv / pyproject.toml 対応
+- [Databricks Apps Dependencies](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/dependencies)
 - [Genie API Reference](https://docs.databricks.com/api/workspace/genie)
 - [Slack Bolt for Python](https://slack.dev/bolt-python/)
