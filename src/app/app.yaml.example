@@ -1,15 +1,57 @@
-command: ["python", "app.py"]
+command: ["uv", "run", "python", "app.py"]
 
 env:
+  # =============================================
+  # 必須: Slack App のトークン
+  # =============================================
   - name: SLACK_BOT_TOKEN
-    value: "xoxb-YOUR-SLACK-BOT-TOKEN"
+    value: "xoxb-YOUR-SLACK-BOT-TOKEN"        # OAuth & Permissions → Bot User OAuth Token
   - name: SLACK_SIGNING_SECRET
-    value: "YOUR-SLACK-SIGNING-SECRET"
+    value: "YOUR-SLACK-SIGNING-SECRET"         # Basic Information → Signing Secret
   - name: SLACK_APP_TOKEN
-    value: "xapp-YOUR-SLACK-APP-TOKEN"
+    value: "xapp-YOUR-SLACK-APP-TOKEN"         # Socket Mode → App-Level Token
+
+  # =============================================
+  # 必須: Genie Space
+  # =============================================
   - name: DATABRICKS_GENIE_SPACE_ID
-    value: "YOUR-GENIE-SPACE-ID"
-  - name: PORT
-    value: "3000"
+    value: "YOUR-GENIE-SPACE-ID"               # Genie Space → Settings → Space ID
+
+  # =============================================
+  # オプション: ログレベル
+  # =============================================
   - name: LOG_LEVEL
     value: "INFO"
+
+  # =============================================
+  # LLM エンドポイント (即答・リサーチ共通)
+  # Foundation Model API の Serving Endpoint 名を指定
+  # =============================================
+  - name: LLM_CHART_ENDPOINT
+    value: "databricks-gpt-5-4-mini"      # チャート仕様生成 (即答+リサーチ両方で使用)
+
+  # =============================================
+  # リサーチモード (任意 — 不要なら ENABLE_RESEARCH を false のまま)
+  # =============================================
+  - name: ENABLE_RESEARCH
+    value: "false"                             # true にするとリサーチモードが有効化
+
+  # --- リサーチモードの必須設定 (ENABLE_RESEARCH=true 時) ---
+  - name: RESEARCH_CATALOG
+    value: "your_catalog"                      # Delta テーブル・Volume の保存先カタログ
+  # - name: RESEARCH_SCHEMA                   # デフォルト: genie_research
+  #   value: "genie_research"
+
+  # --- リサーチモードの LLM エンドポイント ---
+  - name: LLM_RESEARCH_ENDPOINT
+    value: "databricks-gpt-5-4"               # 分析計画・評価・要約用
+  - name: LLM_NARRATIVE_ENDPOINT
+    value: "databricks-claude-opus-4-6"        # レポートナラティブ用
+
+  # --- リサーチモードの詳細設定 (通常は変更不要) ---
+  # - name: INITIAL_PLAN_STEPS                # 初期サブクエスチョン数 (デフォルト: 4、全て並列実行)
+  #   value: "4"
+  # - name: MAX_STEPS                         # 初期+follow-up合計の最大ステップ数 (デフォルト: 6)
+  #   value: "6"
+  # - name: MAX_DURATION                      # 最大実行時間・秒 (デフォルト: 300)
+  #   value: "300"
