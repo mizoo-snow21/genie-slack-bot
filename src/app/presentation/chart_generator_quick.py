@@ -7,11 +7,20 @@ import json
 import logging
 from typing import List, Optional
 
+from config import Config
+
+import os
+from pathlib import Path
+
+# Set MPLCONFIGDIR before importing matplotlib to avoid cache issues on Linux containers
+_mpl_dir = Path("/tmp/matplotlib_cache")
+_mpl_dir.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(_mpl_dir))
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
-import japanize_matplotlib  # noqa: F401
 import seaborn as sns
 import numpy as np
 import pandas as pd
@@ -19,22 +28,29 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 _PALETTE = "muted"
-sns.set_theme(
-    style="whitegrid",
-    palette=_PALETTE,
-    font="IPAexGothic",
-    rc={
-        "axes.titlesize": 14,
-        "axes.titlepad": 14,
-        "axes.labelsize": 11,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "legend.fontsize": 9,
-        "grid.alpha": 0.3,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-    },
-)
+# Use set_style + set_palette instead of set_theme — set_theme resets ALL rcParams
+# including font.family, which destroys japanize_matplotlib's monkey patch.
+sns.set_style("whitegrid", {
+    "grid.alpha": 0.3,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+})
+sns.set_palette(_PALETTE)
+# Japanese font: import japanize_matplotlib for its monkey-patch,
+# then explicit addfont via shared module for Linux containers.
+import japanize_matplotlib  # noqa: F401
+from presentation.font_init import register_japanese_font
+register_japanese_font()
+from matplotlib import rcParams as _rc
+_rc.update({
+    "axes.titlesize": 14,
+    "axes.titlepad": 14,
+    "axes.labelsize": 11,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "legend.fontsize": 9,
+    "axes.unicode_minus": False,
+})
 
 _FIG_W, _FIG_H = 10, 6
 _DPI = 160
@@ -89,8 +105,11 @@ Return ONLY valid JSON, no markdown, no explanation:
   "y2": "column_name or null",
   "hue": "column_name or null",
   "sort": "desc" or "asc" or "none" (ONLY these 3 values),
-  "title": "chart title in same language as data (体言止め、15字以内)"
-}"""
+  "title": "chart title in same language as user's question (体言止め、15字以内)"
+}
+
+Return one JSON object only. No leading/trailing text, no markdown fences. Use null (not "null" string).
+Column names in x, y, y2, hue MUST exist in the provided column list."""
 
 
 def generate_chart(
@@ -143,7 +162,7 @@ Sample data ({len(data_array)} rows total, showing first {len(sample)}):
     try:
         response = llm_client.api_client.do(
             "POST",
-            "/serving-endpoints/databricks-gpt-5-4-nano/invocations",
+            f"/serving-endpoints/{Config.LLM_CHART_ENDPOINT}/invocations",
             body={
                 "messages": [
                     {"role": "system", "content": _CHART_SPEC_PROMPT},
