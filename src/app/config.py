@@ -54,6 +54,9 @@ class Config:
     HEARTBEAT_INTERVAL: int = int(os.getenv("HEARTBEAT_INTERVAL", "30"))  # Seconds between heartbeat updates
     ORPHAN_THRESHOLD: int = int(os.getenv("ORPHAN_THRESHOLD", "600"))  # Seconds before a job is considered orphaned
 
+    # --- Research: storage cleanup ---
+    CLEANUP_RETENTION_DAYS: int = int(os.getenv("CLEANUP_RETENTION_DAYS", "30"))  # Days to retain chart/PDF files in Volume
+
     @classmethod
     def table_name(cls, table: str) -> str:
         """Return fully qualified Delta table name for research storage."""

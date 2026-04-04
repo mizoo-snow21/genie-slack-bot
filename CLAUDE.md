@@ -41,6 +41,13 @@ DI wiring is in `app.py`. All research components are lazy-loaded only when `ENA
 - `scripts/setup_permissions.sh` automates SP permission setup (Genie, Warehouse, UC)
 - `Config.validate_runtime(ws)` checks LLM endpoints and catalog at startup (warns, does not fail)
 
+### Storage & Cleanup
+
+- Charts: `/Volumes/{catalog}/{schema}/charts/{job_id}/{step_id}.png` — per-job directory
+- PDF: `/Volumes/{catalog}/{schema}/charts/{job_id}/report.pdf` — saved alongside charts
+- `CLEANUP_RETENTION_DAYS` (default 30) — orchestrator deletes chart/PDF dirs for jobs older than this after each completion
+- Cleanup is best-effort (async, never fails the current job, max 50 jobs per run)
+
 ### Slack Formatting
 
 - `_markdown_to_slack()` converts Markdown bold (`**text**`) to Slack mrkdwn (`*text*`)

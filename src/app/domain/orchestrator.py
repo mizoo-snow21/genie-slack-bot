@@ -281,6 +281,12 @@ class ResearchOrchestrator:
                 return
             logger.info(f"Job {job_id}: completed in {elapsed}s with {step_counter} steps")
 
+            # Best-effort cleanup of old chart/PDF files
+            try:
+                asyncio.create_task(self._cleanup_old_files())
+            except Exception:
+                pass  # Never fail the job for cleanup
+
         except Exception as e:
             logger.exception(f"Job {job_id}: fatal error")
             # Try to transition to failed from whatever current state
@@ -491,3 +497,50 @@ class ResearchOrchestrator:
                 return True
         logger.warning(f"Job {job_id}: cancel CAS exhausted, stopping processing (orphan recovery will clean up)")
         return True
+
+    async def _cleanup_old_files(self):
+        """Delete chart/PDF files for jobs older than CLEANUP_RETENTION_DAYS.
+
+        Runs best-effort after job completion. Failures are logged but never
+        propagated — cleanup must not affect the current job.
+        """
+        from datetime import datetime, timedelta
+
+        retention_days = Config.CLEANUP_RETENTION_DAYS
+        if retention_days <= 0:
+            return
+
+        cutoff = datetime.utcnow() - timedelta(days=retention_days)
+        cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+
+        try:
+            # Find old completed/failed jobs
+            table = Config.table_name("research_jobs")
+            old_jobs = self._jobs._query_rows(
+                f"SELECT job_id FROM {table} "
+                f"WHERE created_at < :cutoff AND status IN ('completed', 'failed', 'cancelled') "
+                f"LIMIT 50",
+                [{"name": "cutoff", "value": cutoff_str, "type": "STRING"}],
+            )
+
+            if not old_jobs:
+                return
+
+            ws = self._genie._ws
+            base_path = f"/Volumes/{Config.RESEARCH_CATALOG}/{Config.RESEARCH_SCHEMA}/charts"
+
+            deleted = 0
+            for row in old_jobs:
+                job_id = row["job_id"]
+                dir_path = f"{base_path}/{job_id}"
+                try:
+                    await asyncio.to_thread(ws.files.delete_directory, dir_path, recursive=True)
+                    deleted += 1
+                except Exception:
+                    pass  # Directory may not exist or already deleted
+
+            if deleted:
+                logger.info(f"Cleanup: deleted chart/PDF dirs for {deleted} jobs older than {retention_days} days")
+
+        except Exception as e:
+            logger.debug(f"Cleanup skipped: {e}")
