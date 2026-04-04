@@ -16,6 +16,37 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 
+def _sort_sample(
+    sample: list[list],
+    col_names: list[str],
+    chart_spec: dict,
+) -> list[list]:
+    """Sort sample rows to match the chart's sort order.
+
+    Returns the original list unchanged when no sort is needed.
+    """
+    sort_order = str(chart_spec.get("sort", "none")).lower()
+    if sort_order == "none":
+        return sample
+
+    y_col = chart_spec.get("y")
+    if not y_col or y_col not in col_names:
+        return sample
+
+    y_idx = col_names.index(y_col)
+
+    def _sort_key(row):
+        try:
+            return float(row[y_idx])
+        except (ValueError, TypeError, IndexError):
+            return 0.0
+
+    try:
+        return sorted(sample, key=_sort_key, reverse=(sort_order == "desc"))
+    except Exception:
+        return sample
+
+
 class ResearchOrchestrator:
     """Runs the full research loop for a single job."""
 
@@ -424,21 +455,28 @@ class ResearchOrchestrator:
                     remaining_time = max_duration - (time.time() - start_time)
                     if remaining_time > Config.CHART_TIMEOUT:
                         try:
-                            chart_path = await asyncio.wait_for(
+                            result = await asyncio.wait_for(
                                 self._chart_gen.generate(
                                     job_id=job_id,
                                     step_id=step_id,
                                     columns=columns,
                                     sample_rows=sample,
-                                    catalog=Config.RESEARCH_CATALOG,
-                                    schema=Config.RESEARCH_SCHEMA,
                                     column_profile=profile,
                                     question=question,
                                 ),
                                 timeout=Config.CHART_TIMEOUT,
                             )
-                            if chart_path:
+                            if result:
+                                chart_path, chart_spec = result
                                 self._steps.update_step_chart(job_id, step_id, chart_path)
+                                # Sort table data to match chart sort order
+                                sorted_sample = _sort_sample(
+                                    sample, col_names, chart_spec,
+                                )
+                                if sorted_sample is not sample:
+                                    self._steps.update_step_sample(
+                                        job_id, step_id, sorted_sample,
+                                    )
                         except asyncio.TimeoutError:
                             logger.warning(f"Chart generation timed out for {job_id}/{step_id}")
                         except Exception as e:

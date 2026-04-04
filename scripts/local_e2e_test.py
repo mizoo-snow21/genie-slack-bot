@@ -78,10 +78,10 @@ async def run_tests(profile: str):
         result.fail("import GenieClient", str(e))
 
     try:
-        from presentation.chart_generator_quick import generate_chart
-        result.ok("import chart_generator_quick")
+        from presentation.chart_generator import ChartGenerator
+        result.ok("import ChartGenerator")
     except Exception as e:
-        result.fail("import chart_generator_quick", str(e))
+        result.fail("import ChartGenerator", str(e))
 
     try:
         from infra.llm_client import LLMClient
@@ -135,29 +135,29 @@ async def run_tests(profile: str):
     # ============================================================
     print("\n[5] Quick-answer chart")
     try:
+        chart_gen = ChartGenerator(llm_client=LLMClient(ws), ws=ws)
         if qa_result.get("success") and qa_result.get("result_data"):
             rd = qa_result["result_data"]
             data_array = rd.get("data", {}).get("data_array", [])
             columns = rd.get("schema", {}).get("columns", [])
             if data_array and columns:
                 col_names = [c["name"] for c in columns]
-                png = generate_chart(
+                png = chart_gen.generate_bytes(
                     column_names=col_names,
                     data_array=data_array,
                     column_types=columns,
-                    llm_client=genie,  # uses genie's api_client for LLM call
                     user_question="売上TOP3",
                 )
                 if png:
-                    result.ok("generate_chart()", f"{len(png)} bytes PNG")
+                    result.ok("generate_bytes()", f"{len(png)} bytes PNG")
                 else:
-                    result.ok("generate_chart()", "returned None (LLM decided no chart)")
+                    result.ok("generate_bytes()", "returned None (LLM decided no chart)")
             else:
-                result.ok("generate_chart()", "skipped — no data in response")
+                result.ok("generate_bytes()", "skipped — no data in response")
         else:
-            result.ok("generate_chart()", "skipped — quick answer failed")
+            result.ok("generate_bytes()", "skipped — quick answer failed")
     except Exception as e:
-        result.fail("generate_chart()", traceback.format_exc())
+        result.fail("generate_bytes()", traceback.format_exc())
 
     # ============================================================
     # 6. Genie API — schema fetch (async, used by research)
@@ -348,7 +348,7 @@ async def run_tests(profile: str):
             slack_signing_secret="test",
             slack_app_token="xapp-test",
             genie_client=genie,
-            chart_generator_func=generate_chart,
+            chart_generator=chart_gen,
             orchestrator=orchestrator,
             job_store=job_store,
             step_store=step_store,
@@ -362,7 +362,7 @@ async def run_tests(profile: str):
             slack_signing_secret="test",
             slack_app_token="xapp-test",
             genie_client=genie,
-            chart_generator_func=generate_chart,
+            chart_generator=chart_gen,
         )
         assert handler_no_research._research_enabled is False
         result.ok("SlackHandler(research_enabled=False)")

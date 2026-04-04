@@ -17,7 +17,7 @@ import logging
 import re
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
@@ -40,7 +40,7 @@ class SlackHandler:
         slack_signing_secret: str,
         slack_app_token: str,
         genie_client,
-        chart_generator_func: Optional[Callable] = None,
+        chart_generator=None,
         orchestrator=None,
         job_store=None,
         step_store=None,
@@ -52,7 +52,7 @@ class SlackHandler:
         )
         self._slack_app_token = slack_app_token
         self._genie = genie_client
-        self._chart_generator_func = chart_generator_func
+        self._chart_gen = chart_generator
         self._orchestrator = orchestrator
         self._job_store = job_store
         self._step_store = step_store
@@ -495,7 +495,7 @@ class SlackHandler:
                     logger.debug(f"create_directory {pdf_dir}: {dir_err}")
                 pdf_volume_path = f"{pdf_dir}/report.pdf"
                 await asyncio.to_thread(
-                    self._genie.ws.files.upload, pdf_volume_path, io.BytesIO(pdf_bytes), True
+                    self._genie.ws.files.upload, pdf_volume_path, io.BytesIO(pdf_bytes), overwrite=True
                 )
                 logger.info(f"PDF saved to Volume: {pdf_volume_path}")
             except Exception as e:
@@ -748,30 +748,16 @@ class SlackHandler:
                 f"Generating chart: {len(column_names)} cols, {len(data_array)} rows"
             )
 
-            if self._chart_generator_func:
-                # Async chart generator (if provided)
+            if self._chart_gen:
                 png_bytes = await asyncio.to_thread(
-                    self._chart_generator_func,
+                    self._chart_gen.generate_bytes,
                     column_names,
                     data_array,
                     columns,
-                    title=title,
-                    llm_client=self._genie.ws,
                     user_question=user_question,
                 )
             else:
-                # Fallback: import chart_generator_quick directly
-                from presentation.chart_generator_quick import generate_chart
-
-                png_bytes = await asyncio.to_thread(
-                    generate_chart,
-                    column_names,
-                    data_array,
-                    columns,
-                    title=title,
-                    llm_client=self._genie.ws,
-                    user_question=user_question,
-                )
+                png_bytes = None
 
             if not png_bytes:
                 logger.warning(

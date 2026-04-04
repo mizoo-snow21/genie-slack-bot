@@ -374,8 +374,8 @@ class GenieClient:
                 f"/api/2.0/genie/spaces/{self.space_id}/start-conversation",
                 {
                     "content": (
-                        "List all available tables and their columns. "
-                        "Output as: table_name: col1, col2, ..."
+                        "List all available tables and their columns with data types. "
+                        "Output as: table_name: col1 (type), col2 (type), ..."
                     )
                 },
             )

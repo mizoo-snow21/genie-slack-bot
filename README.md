@@ -8,7 +8,7 @@ Databricks Apps 上で動作し、Socket Mode で Slack に接続する。
 - **⚡ 即答モード** — Slack から Genie Space に質問。SQL を自動生成・実行し、結果をテーブルとグラフで返す
 - **🔬 リサーチモード** — 質問を自動分解し、複数のサブクエリを並列実行。LLM が結果を評価・深堀りし、PDF レポートを生成
 - **スレッドで会話継続** — 同じスレッド内でフォローアップ質問が可能（Genie の conversation を維持）
-- **LLM 駆動のグラフ自動生成** — Foundation Model API がデータと質問の意図から最適なグラフ種別を判断し、seaborn/matplotlib で描画
+- **LLM 駆動のグラフ自動生成** — Foundation Model API がデータと質問の意図から最適なグラフ種別（15種）を判断し、seaborn/matplotlib で描画。テーブルとチャートのソート順は自動で一致
 - **リアルタイム進捗表示** — リサーチ中は現在の分析内容を Slack にリアルタイム更新
 - **フィードバック機能** — Helpful / Not Helpful ボタンで Genie API にフィードバック送信
 
@@ -29,7 +29,8 @@ Slack ──(Socket Mode)──> Databricks App ──(Genie API)──> Genie S
 | Slack Bot (`slack-bolt` AsyncApp) | Socket Mode でメッセージ受信・モード選択・進捗更新・PDF アップロード |
 | Databricks App | サービスプリンシパルの OAuth M2M 認証で Genie API を呼び出し |
 | Genie Space | 自然言語 → SQL 変換、Unity Catalog テーブルへのクエリ実行 |
-| Foundation Model API | 分析計画生成・グラフ仕様決定・結果評価・レポートナラティブ生成 |
+| Foundation Model API | 分析計画生成・結果評価・レポートナラティブ生成 |
+| Chart Spec Client (`chart_spec_client`) | LLM でデータと質問意図から最適なグラフ仕様（15種）を決定 |
 | Research Orchestrator | Plan → Parallel Execute → Evaluate → Synthesize パイプライン |
 | Delta Tables | ジョブ・ステップ・レポートの状態管理（ハートビート・孤児回復対応） |
 | seaborn + japanize-matplotlib | グラフ仕様に基づいて PNG 画像を描画（日本語対応） |
@@ -59,13 +60,13 @@ genie-slack-bot/
 │   │   ├── llm_client.py             # Foundation Model API クライアント
 │   │   ├── job_store.py              # Delta ジョブテーブル CRUD
 │   │   ├── step_store.py             # Delta ステップ・レポートテーブル CRUD
+│   │   ├── chart_spec_client.py       # LLM チャートスペック生成
 │   │   └── init_tables.py            # Delta テーブル自動作成
 │   └── presentation/                 # Slack UI・グラフ・PDF
 │       ├── slack_handler.py          # Slack イベント処理・進捗ポーリング
 │       ├── mode_selector.py          # モード選択ボタン Block Kit
 │       ├── progress_view.py          # 進捗表示 Block Kit
-│       ├── chart_generator_quick.py  # 即答モード用 LLM チャート生成
-│       ├── chart_generator.py        # リサーチモード用 LLM チャート生成
+│       ├── chart_generator.py        # 統合チャート生成（即答 + リサーチ）
 │       ├── font_init.py              # 日本語フォント登録（共通）
 │       └── pdf_renderer.py           # PDF レポート生成
 ├── scripts/
@@ -253,7 +254,7 @@ Starting to receive messages from a new connection
 1. Bot に質問を送ると **⚡ 即答** / **🔬 詳しく分析** のモード選択ボタンが表示される
 2. **⚡ 即答** → 従来通りの即座回答（テーブル + チャート）
 3. **🔬 詳しく分析** → リサーチパイプラインが起動:
-   - 質問を「俯瞰→仮説検証→交絡因子統制」のフレームワークで4つのサブクエスチョンに自動分解（並列実行）
+   - 質問を「俯瞰→仮説検証→交絡因子統制」のフレームワークで4つのサブクエスチョンに自動分解（並列実行）。Genie Space のスキーマ（型情報付き）を参照し、実在するカラムのみを使用
    - 進捗がリアルタイムで Slack に表示される
    - LLM が結果を評価し、品質シグナル（外れ値・矛盾・集中・未説明の差）があれば追加の深堀り質問を実行
    - 完了後、PDF レポートがスレッドにアップロードされる
@@ -262,21 +263,25 @@ Starting to receive messages from a new connection
 
 ### グラフの自動生成
 
-LLM（Foundation Model API）がユーザーの質問とクエリ結果を分析し、最適なグラフ種別を自動選択します。
+LLM（Foundation Model API）がユーザーの質問とクエリ結果を分析し、最適なグラフ種別を自動選択します。Y 軸の値が小さい整数（件数等）の場合、目盛りは自動で整数のみに制限されます。
 
 | グラフ種別 | 選択される場面 |
 |---|---|
-| 縦棒グラフ | ランキング・比較（12カテゴリ以下） |
-| 横棒グラフ | ランキング・比較（13カテゴリ以上 or 平均ラベル長16文字超） |
-| 折れ線グラフ | 時系列の推移 |
-| 複数折れ線 | カテゴリ別の時系列推移 |
-| 面グラフ | 累計・ボリュームの推移 |
-| ドーナツチャート | シェア・構成比・割合 |
-| 積み上げ棒グラフ | カテゴリ別の内訳比較 |
-| グループ化棒グラフ | 同スケールの複数指標比較 |
-| 散布図 | 2つの数値の相関 |
-| ヒストグラム | 数値の分布 |
-| 2軸グラフ | スケールが異なる2指標の比較 |
+| 縦棒グラフ (bar) | ランキング・比較（12カテゴリ以下） |
+| 横棒グラフ (hbar) | ランキング・比較（13カテゴリ以上 or 長いラベル） |
+| 折れ線グラフ (line) | 時系列の推移（単一系列） |
+| 複数折れ線 (multiline) | カテゴリ別の時系列推移 |
+| 面グラフ (area) | 累計・ボリュームの推移 |
+| 円グラフ (pie) | 構成比（2〜7カテゴリ） |
+| ドーナツチャート (donut) | 構成比（中央に合計表示） |
+| 積み上げ棒グラフ (stacked_bar) | カテゴリ別の内訳比較 |
+| グループ化棒グラフ (grouped_bar) | 同スケールの複数指標比較 |
+| 散布図 (scatter) | 2つの数値の相関 |
+| バブルチャート (bubble) | 3つの数値の関係（サイズ=第3指標） |
+| 箱ひげ図 (boxplot) | カテゴリ別の分布・ばらつき |
+| ヒートマップ (heatmap) | 2カテゴリ×1数値のマトリクス |
+| ヒストグラム (histogram) | 数値の分布 |
+| 2軸グラフ (dual_axis) | スケールが異なる2指標の比較 |
 
 ### フィードバック
 
@@ -358,7 +363,7 @@ Bot への DM を特定ユーザーのみに制限する方法です。
 - 会話マッピング（スレッド ↔ Genie conversation）はインメモリ管理のため、アプリ再起動で消失する
 - Genie API のフィードバックは rating（POSITIVE/NEGATIVE）のみ保存可能。テキストコメントは未サポート
 - リサーチモードは最大 6 ステップ。`MAX_DURATION` 超過時は深堀り・チャートをスキップするが、Genie API 応答待ち・ナラティブ生成・PDF は完了まで待機するため全体で 10 分程度かかることがある
-- Genie Space のテーブル・カラムが少ない場合、チャートタイプが bar/hbar に偏りやすい（時系列や構成比データがないと line/pie が選択されない）。より多くのテーブル・カラムを持つ Genie Space ほどリサーチモードの分析が多角的になる
+- Genie Space のテーブル・カラムが少ない場合、チャートタイプが bar/hbar に偏りやすい（時系列や構成比データがないと line/pie が選択されない）。より多くのテーブル・カラムを持つ Genie Space ほどリサーチモードの分析が多角的になる。Plan LLM にはスキーマ（型情報付き）が渡されるが、スキーマの dimension が少ない場合は同じ dimension を異なるメジャー・集計で再利用する
 - `bundle deploy` はファイルをアップロードするだけでアプリを再起動しない。`databricks apps deploy` が必要
 
 ## 参考
