@@ -63,6 +63,12 @@ class Config:
         return f"{cls.RESEARCH_CATALOG}.{cls.RESEARCH_SCHEMA}.{table}"
 
     @classmethod
+    def volume_charts_dir(cls, job_id: str = "") -> str:
+        """Return Volume path for chart/PDF storage."""
+        base = f"/Volumes/{cls.RESEARCH_CATALOG}/{cls.RESEARCH_SCHEMA}/charts"
+        return f"{base}/{job_id}" if job_id else base
+
+    @classmethod
     def validate(cls):
         """Validate that all required configuration is present."""
         required_vars = [

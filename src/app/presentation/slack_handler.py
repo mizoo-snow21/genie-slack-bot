@@ -488,11 +488,11 @@ class SlackHandler:
 
             # Save PDF to Volume for persistence (Slack files may expire)
             try:
-                pdf_dir = f"/Volumes/{Config.RESEARCH_CATALOG}/{Config.RESEARCH_SCHEMA}/charts/{job_id}"
+                pdf_dir = Config.volume_charts_dir(job_id)
                 try:
                     await asyncio.to_thread(self._genie.ws.files.create_directory, pdf_dir)
-                except Exception:
-                    pass
+                except Exception as dir_err:
+                    logger.debug(f"create_directory {pdf_dir}: {dir_err}")
                 pdf_volume_path = f"{pdf_dir}/report.pdf"
                 await asyncio.to_thread(
                     self._genie.ws.files.upload, pdf_volume_path, io.BytesIO(pdf_bytes), True

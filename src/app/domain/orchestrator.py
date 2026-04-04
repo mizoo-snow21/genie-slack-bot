@@ -143,6 +143,8 @@ class ResearchOrchestrator:
                     failed_questions.append(sq)
 
             step_counter = len(sub_questions)
+            # plan_steps tracks only Plan + follow-up (retries are free, don't count)
+            plan_steps = len(sub_questions)
 
             if not completed_summaries:
                 self._jobs.transition_status(
@@ -161,112 +163,92 @@ class ResearchOrchestrator:
             # Parallel batch failures should NOT carry over.
             consecutive_failures = 0
 
-            # --- AUTO-RETRY failed questions via Evaluate ---
-            # If any Plan questions failed (Genie couldn't generate SQL),
-            # ask Evaluate to generate alternatives before normal evaluation.
-            if failed_questions and step_counter < max_steps:
-                if not self._jobs.transition_status(job_id, "running_subquestion", "evaluating"):
+            # --- AUTO-RETRY failed questions (outside MAX_STEPS budget) ---
+            # Retries restore the Plan's intended coverage. They don't count
+            # toward max_steps so follow-up budget is preserved.
+            if failed_questions:
+                if not self._transition_to(job_id, "evaluating"):
                     return
 
                 retry_eval = await self._llm.evaluate_progress(
                     question, completed_summaries, failed_questions=failed_questions,
                     force_continue=True,
                 )
-                retry_qs = retry_eval.get("new_questions", [])
-                for rq in retry_qs:
-                    if len(sub_questions) < max_steps:
-                        sub_questions.append(rq)
-                        new_step_id = f"s{len(sub_questions)}"
-                        self._steps.create_step(job_id, new_step_id, len(sub_questions), rq)
-                        logger.info(f"Job {job_id}: added retry question for failed step: {rq[:60]}")
+                retry_qs = retry_eval.get("new_questions", [])[:len(failed_questions)]
 
-                # Execute retry questions sequentially
-                while step_counter < len(sub_questions) and step_counter < max_steps:
+                for i, rq in enumerate(retry_qs):
                     if self._check_cancel(job_id):
                         return
                     if time.time() - start_time > max_duration:
                         break
 
-                    step_id = f"s{step_counter + 1}"
-                    sq = sub_questions[step_counter]
+                    step_counter += 1
+                    sid = f"s{step_counter}"
+                    self._steps.create_step(job_id, sid, step_counter, rq)
+                    logger.info(f"Job {job_id}: retry for failed step: {rq[:60]}")
 
-                    if not self._jobs.transition_status(job_id, "evaluating", "running_subquestion"):
+                    if not self._transition_to(job_id, "running_subquestion"):
                         return
 
-                    augmented_question = self._inject_context(sq, completed_summaries)
                     result = await self._execute_step(
-                        job_id, step_id, augmented_question, max_rows,
+                        job_id, sid, self._inject_context(rq, completed_summaries), max_rows,
                         config=config, start_time=start_time, max_duration=max_duration,
                     )
                     if result:
                         completed_summaries.append({
-                            "step_id": step_id,
-                            "question": sq,
+                            "step_id": sid, "question": rq,
                             "summary": result["summary"],
                             "row_count": result.get("row_count", 0),
                             "column_meta": result.get("column_meta", []),
                         })
 
-                    step_counter += 1
+                    # Transition back to evaluating for next retry (if any)
+                    if i < len(retry_qs) - 1:
+                        self._transition_to(job_id, "evaluating")
 
-                    if step_counter < len(sub_questions):
-                        if not self._jobs.transition_status(job_id, "running_subquestion", "evaluating"):
-                            return
-
-                # Clear failed_questions — retries already attempted
                 failed_questions = []
 
-            # --- EVALUATE once after parallel batch (+ retries) ---
-            if step_counter < max_steps and time.time() - start_time < max_duration:
+            # --- EVALUATE (follow-up budget uses plan_steps, not step_counter) ---
+            if plan_steps < max_steps and time.time() - start_time < max_duration:
                 if self._check_cancel(job_id):
                     return
 
-                # Ensure we're in the right state for evaluate
-                job = self._jobs.get_job(job_id)
-                if job and job["status"] == "running_subquestion":
-                    if not self._jobs.transition_status(job_id, "running_subquestion", "evaluating"):
-                        return
-                elif job and job["status"] != "evaluating":
+                if not self._transition_to(job_id, "evaluating"):
                     return
 
-                evaluation = await self._llm.evaluate_progress(
-                    question, completed_summaries,
-                )
+                evaluation = await self._llm.evaluate_progress(question, completed_summaries)
 
                 if evaluation.get("action") == "continue":
-                    new_qs = evaluation.get("new_questions", [])
-                    for nq in new_qs:
-                        if len(sub_questions) < max_steps:
-                            sub_questions.append(nq)
-                            new_step_id = f"s{len(sub_questions)}"
-                            self._steps.create_step(job_id, new_step_id, len(sub_questions), nq)
+                    # Pre-build (question, step_id) tuples so registration and execution stay in sync
+                    followup_tasks = []
+                    for nq in evaluation.get("new_questions", []):
+                        if plan_steps < max_steps:
+                            step_counter += 1
+                            plan_steps += 1
+                            sid = f"s{step_counter}"
+                            self._steps.create_step(job_id, sid, step_counter, nq)
+                            followup_tasks.append((nq, sid))
 
-                    # --- Sequential follow-up loop for LLM-added questions ---
-                    while step_counter < len(sub_questions) and step_counter < max_steps:
+                    # --- Sequential follow-up loop ---
+                    for nq, sid in followup_tasks:
+
                         if self._check_cancel(job_id):
                             return
-
                         if time.time() - start_time > max_duration:
                             logger.warning(f"Job {job_id}: max duration reached")
                             break
 
-                        step_id = f"s{step_counter + 1}"
-                        sq = sub_questions[step_counter]
-
-                        if not self._jobs.transition_status(job_id, "evaluating", "running_subquestion"):
+                        if not self._transition_to(job_id, "running_subquestion"):
                             return
 
-                        augmented_question = self._inject_context(sq, completed_summaries)
-
                         result = await self._execute_step(
-                            job_id, step_id, augmented_question, max_rows,
+                            job_id, sid, self._inject_context(nq, completed_summaries), max_rows,
                             config=config, start_time=start_time, max_duration=max_duration,
                         )
 
                         if result:
                             completed_summaries.append({
-                                "step_id": step_id,
-                                "question": sq,
+                                "step_id": sid, "question": nq,
                                 "summary": result["summary"],
                                 "row_count": result.get("row_count", 0),
                                 "column_meta": result.get("column_meta", []),
@@ -275,29 +257,25 @@ class ResearchOrchestrator:
                         else:
                             consecutive_failures += 1
                             if consecutive_failures >= 3:
-                                logger.error(f"Job {job_id}: {consecutive_failures} consecutive step failures, failing job")
                                 self._jobs.transition_status(
                                     job_id, "running_subquestion", "failed",
-                                    error=f"{consecutive_failures} consecutive sub-question failures"
+                                    error=f"{consecutive_failures} consecutive failures"
                                 )
                                 return
 
-                        step_counter += 1
-
-                        # Evaluate after each follow-up step
-                        if step_counter < max_steps and time.time() - start_time < max_duration:
-                            if not self._jobs.transition_status(job_id, "running_subquestion", "evaluating"):
+                        # Re-evaluate after each follow-up
+                        if plan_steps < max_steps and time.time() - start_time < max_duration:
+                            if not self._transition_to(job_id, "evaluating"):
                                 return
-
                             evaluation = await self._llm.evaluate_progress(question, completed_summaries)
-
                             if evaluation.get("action") == "continue":
-                                new_qs = evaluation.get("new_questions", [])
-                                for nq in new_qs:
-                                    if len(sub_questions) < max_steps:
-                                        sub_questions.append(nq)
-                                        new_step_id = f"s{len(sub_questions)}"
-                                        self._steps.create_step(job_id, new_step_id, len(sub_questions), nq)
+                                for eq in evaluation.get("new_questions", []):
+                                    if plan_steps < max_steps:
+                                        step_counter += 1
+                                        plan_steps += 1
+                                        esid = f"s{step_counter}"
+                                        self._steps.create_step(job_id, esid, step_counter, eq)
+                                        followup_tasks.append((eq, esid))
                             else:
                                 break
 
@@ -515,6 +493,22 @@ class ResearchOrchestrator:
         report = ReportRenderer.merge(narrative, evidence, job_id=job_id)
         return report, narrative
 
+    def _transition_to(self, job_id: str, target: str) -> bool:
+        """Transition job to target status from whatever the current status is.
+
+        Reads actual status first to avoid CAS failures from hardcoded
+        'from' states. Returns False if job is terminal or transition fails.
+        """
+        job = self._jobs.get_job(job_id)
+        if not job:
+            return False
+        current = job["status"]
+        if current in ("completed", "failed", "cancelled"):
+            return False
+        if current == target:
+            return True  # already there
+        return self._jobs.transition_status(job_id, current, target)
+
     def _inject_context(self, question: str, prior_summaries: list[dict]) -> str:
         """If prior steps exist, prepend relevant context to the question."""
         if not prior_summaries:
@@ -568,13 +562,22 @@ class ResearchOrchestrator:
         logger.warning(f"Job {job_id}: cancel CAS exhausted, stopping processing (orphan recovery will clean up)")
         return True
 
+    _last_cleanup_at: float = 0  # class-level cooldown tracker
+
     async def _cleanup_old_files(self):
         """Delete chart/PDF files for jobs older than CLEANUP_RETENTION_DAYS.
 
-        Runs best-effort after job completion. Failures are logged but never
-        propagated — cleanup must not affect the current job.
+        Runs best-effort after job completion with a 1-hour cooldown.
+        Failures are logged but never propagated.
         """
+        import time as _time
         from datetime import datetime, timedelta
+
+        # Cooldown: skip if ran within the last hour
+        now = _time.time()
+        if now - ResearchOrchestrator._last_cleanup_at < 3600:
+            return
+        ResearchOrchestrator._last_cleanup_at = now
 
         retention_days = Config.CLEANUP_RETENTION_DAYS
         if retention_days <= 0:
@@ -584,33 +587,28 @@ class ResearchOrchestrator:
         cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
 
         try:
-            # Find old completed/failed jobs
-            table = Config.table_name("research_jobs")
-            old_jobs = self._jobs._query_rows(
-                f"SELECT job_id FROM {table} "
-                f"WHERE created_at < :cutoff AND status IN ('completed', 'failed', 'cancelled') "
-                f"LIMIT 50",
-                [{"name": "cutoff", "value": cutoff_str, "type": "STRING"}],
+            old_job_ids = await asyncio.to_thread(
+                self._jobs.get_old_job_ids, cutoff_str
             )
-
-            if not old_jobs:
+            if not old_job_ids:
                 return
 
             ws = self._genie._ws
-            base_path = f"/Volumes/{Config.RESEARCH_CATALOG}/{Config.RESEARCH_SCHEMA}/charts"
 
-            deleted = 0
-            for row in old_jobs:
-                job_id = row["job_id"]
-                dir_path = f"{base_path}/{job_id}"
+            async def _delete(jid: str):
                 try:
-                    await asyncio.to_thread(ws.files.delete_directory, dir_path, recursive=True)
-                    deleted += 1
+                    await asyncio.to_thread(
+                        ws.files.delete_directory,
+                        Config.volume_charts_dir(jid), recursive=True,
+                    )
+                    return True
                 except Exception:
-                    pass  # Directory may not exist or already deleted
+                    return False
 
+            results = await asyncio.gather(*[_delete(jid) for jid in old_job_ids])
+            deleted = sum(1 for r in results if r)
             if deleted:
-                logger.info(f"Cleanup: deleted chart/PDF dirs for {deleted} jobs older than {retention_days} days")
+                logger.info(f"Cleanup: deleted {deleted} job dirs older than {retention_days} days")
 
         except Exception as e:
             logger.debug(f"Cleanup skipped: {e}")

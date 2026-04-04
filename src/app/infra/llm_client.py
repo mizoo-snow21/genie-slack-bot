@@ -105,40 +105,65 @@ Then select the chart type that makes that message IMMEDIATELY visible.
 
 Selection rules (check in order, use the FIRST match):
 
-1. **line** — if x-axis represents time (dates, months, quarters, years) or a natural ordered progression (age bands, distance bands, size bands sorted numerically). Shows how values change across a sequence.
+1. **line** — if x-axis represents time (dates, months, quarters, years) and there is ONE series. Shows trends over time.
 
-2. **pie** — if the data shows composition/share with 2-7 categories and values represent parts of a whole. Otherwise skip pie.
+2. **multiline** — if x-axis represents time AND a categorical column can group multiple series. Requires hue/color_column.
 
-3. **scatter** — if the QUESTION asks about the relationship between two continuous measurements AND both x and y are numeric measurements (not categories or bins). A categorical column may be used as color_column.
+3. **area** — like line but filled. Good for cumulative totals, volume over time, or emphasizing magnitude.
 
-4. **boxplot** — if each category has multiple raw (non-aggregated) rows and the goal is to show distribution/spread.
+4. **pie** — if the data shows composition/share with 2-7 categories and values represent parts of a whole. Full circle chart.
 
-5. **bar** — if x-axis has a natural order (e.g., size bands, age bands) with short labels and few categories (≤8). Vertical bars show progression left-to-right.
+5. **donut** — same as pie but displayed as a ring with total in center. Use when you want to emphasize the total alongside proportions.
 
-6. **heatmap** — if the data has TWO categorical columns and ONE numeric column, forming a matrix (e.g., category A × category B → value). Best for cross-tabulations where color intensity shows magnitude. Use x_column for one dimension, color_column for the other, y_column for the numeric value.
+6. **scatter** — if the QUESTION asks about the relationship between two continuous measurements AND both x and y are numeric.
 
-7. **hbar** — for everything else: rankings, comparisons across many categories, long labels. This is the FALLBACK, not the default.
+7. **bubble** — like scatter but with a third numeric dimension shown as point size. Use y2 for the size column. Best when 3 numeric columns are available.
 
-IMPORTANT: Do NOT default to hbar. Actively look for reasons to use line, pie, heatmap, bar, or scatter first. Use hbar only when no other type fits better.
+8. **boxplot** — if each category has multiple raw (non-aggregated) rows and the goal is to show distribution/spread.
+
+9. **heatmap** — if the data has TWO categorical columns and ONE numeric column, forming a matrix. Color intensity shows magnitude. Use x for one dimension, color_column for the other, y for the numeric value.
+
+10. **stacked_bar** — if the data shows composition across multiple groups with a color breakdown. Best for parts-of-whole comparison.
+
+11. **grouped_bar** — side-by-side bars for comparing 2-3 measures with similar scales across categories. Requires hue/color_column.
+
+12. **histogram** — distribution of a single numeric column. Set x to the numeric column.
+
+13. **dual_axis** — two measures with different scales over the same x-axis. y = left axis, y2 = right axis.
+
+14. **bar** — if x-axis has a natural order or few categories (≤12) with short labels. Vertical bars.
+
+15. **hbar** — for everything else: rankings, comparisons across many categories, long labels. This is the FALLBACK, not the default.
+
+IMPORTANT: Do NOT default to hbar. Actively look for reasons to use line, multiline, area, pie, donut, scatter, bubble, heatmap, bar, or other types first. Use hbar only when no other type fits better.
 
 Rules:
 - x_column and y_column MUST be column names that exist in the provided column list
 - x_column = categorical or first variable, y_column = numeric measure
-- color_column is optional — use only when ≤ 8 distinct values AND chart_type supports grouping (bar, hbar, line, scatter)
+- color_column is optional — use only when ≤ 8 distinct values AND chart_type supports grouping (bar, hbar, line, multiline, scatter, grouped_bar, stacked_bar)
 - Title MUST be in the SAME LANGUAGE as the user's question (not the column names)
 - Title must reflect the SPECIFIC analytical angle of the question — include the grouping/color axis, not just the y-axis measure
 - If a color_column or grouping axis is present, mention it in the title (e.g., "カテゴリ別の地域別売上" not just "地域別売上")
 - If you cannot produce a natural title, return empty string
+- sort: "desc" (highest first), "asc" (lowest first, or natural order like age bands/time), or "none" (keep original order). Choose the sort that makes the chart's message clearest.
 
 {json_rule}
 Examples:
-{{"chart_type": "line", "x_column": "month", "y_column": "avg_sales", "title": "月別平均売上推移", "color_column": null}}
-{{"chart_type": "bar", "x_column": "age_band", "y_column": "count", "title": "年齢帯別件数", "color_column": "type"}}
-{{"chart_type": "pie", "x_column": "segment", "y_column": "share", "title": "セグメント構成比", "color_column": null}}
-{{"chart_type": "hbar", "x_column": "group", "y_column": "revenue", "title": "グループ別売上", "color_column": null}}
-{{"chart_type": "scatter", "x_column": "metric_a", "y_column": "metric_b", "title": "指標Aと指標Bの関係", "color_column": "category"}}
-{{"chart_type": "boxplot", "x_column": "category", "y_column": "price", "title": "カテゴリ別価格分布", "color_column": null}}
-{{"chart_type": "heatmap", "x_column": "sub_category", "y_column": "avg_value", "title": "カテゴリ×サブカテゴリ別平均値", "color_column": "category"}}
+{{"chart_type": "line", "x_column": "month", "y_column": "avg_value", "title": "月別平均値推移", "color_column": null, "sort": "none"}}
+{{"chart_type": "multiline", "x_column": "month", "y_column": "value", "title": "月別カテゴリ別推移", "color_column": "category", "sort": "none"}}
+{{"chart_type": "area", "x_column": "month", "y_column": "cumulative", "title": "累計推移", "color_column": null, "sort": "none"}}
+{{"chart_type": "pie", "x_column": "segment", "y_column": "share", "title": "セグメント構成比", "color_column": null, "sort": "desc"}}
+{{"chart_type": "donut", "x_column": "segment", "y_column": "share", "title": "セグメント構成比", "color_column": null, "sort": "desc"}}
+{{"chart_type": "scatter", "x_column": "metric_a", "y_column": "metric_b", "title": "指標Aと指標Bの関係", "color_column": "category", "sort": "none"}}
+{{"chart_type": "bubble", "x_column": "metric_a", "y_column": "metric_b", "title": "3指標の関係", "color_column": "category", "y2_column": "metric_c", "sort": "none"}}
+{{"chart_type": "boxplot", "x_column": "category", "y_column": "value", "title": "カテゴリ別値分布", "color_column": null, "sort": "none"}}
+{{"chart_type": "heatmap", "x_column": "sub_category", "y_column": "avg_value", "title": "カテゴリ×サブカテゴリ別平均値", "color_column": "category", "sort": "none"}}
+{{"chart_type": "stacked_bar", "x_column": "group", "y_column": "count", "title": "グループ別構成比", "color_column": "type", "sort": "none"}}
+{{"chart_type": "grouped_bar", "x_column": "category", "y_column": "value", "title": "カテゴリ別比較", "color_column": "group", "sort": "none"}}
+{{"chart_type": "histogram", "x_column": "amount", "y_column": "amount", "title": "金額分布", "color_column": null, "sort": "none"}}
+{{"chart_type": "dual_axis", "x_column": "month", "y_column": "count", "title": "件数と平均値の推移", "color_column": null, "y2_column": "avg_value", "sort": "none"}}
+{{"chart_type": "bar", "x_column": "age_band", "y_column": "count", "title": "年齢帯別件数", "color_column": "type", "sort": "asc"}}
+{{"chart_type": "hbar", "x_column": "group", "y_column": "revenue", "title": "グループ別売上", "color_column": null, "sort": "desc"}}
 
 Only skip if no numeric column: {{"skip": true}}"""
 
@@ -500,11 +525,14 @@ class LLMClient:
                 logger.error(f"Failed to parse evaluation JSON: {text[:200]}")
                 return {"action": "synthesize"}
 
-        # force_continue: override synthesize decision when retrying failed questions
+        # force_continue: override synthesize when retrying failed questions
         if force_continue and result.get("action") != "continue":
-            logger.info(f"Evaluate wanted to {result.get('action')} but force_continue=True, keeping as synthesize (no valid alternatives)")
-            # If LLM didn't produce alternatives despite being asked, don't force
-            if not result.get("new_questions"):
+            if result.get("new_questions"):
+                # LLM said synthesize but provided alternatives — override to continue
+                result["action"] = "continue"
+                logger.info(f"Evaluate overridden to continue (force_continue, {len(result['new_questions'])} alternatives)")
+            else:
+                logger.info("Evaluate produced no alternatives despite force_continue, synthesizing")
                 return {"action": "synthesize"}
 
         # Log reason for debugging

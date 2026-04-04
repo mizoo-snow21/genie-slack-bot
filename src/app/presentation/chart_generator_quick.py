@@ -1,59 +1,16 @@
 """
-Chart generator using LLM for chart spec + matplotlib/seaborn for rendering.
-The LLM decides what chart to draw; matplotlib renders it with japanize-matplotlib for Japanese.
+Chart generator using LLM for chart spec + shared renderer for rendering.
+The LLM decides what chart to draw; chart_renderer handles all matplotlib/seaborn rendering.
 """
-import io
 import json
 import logging
 from typing import List, Optional
 
 from config import Config
 
-import os
-from pathlib import Path
-
-# Set MPLCONFIGDIR before importing matplotlib to avoid cache issues on Linux containers
-_mpl_dir = Path("/tmp/matplotlib_cache")
-_mpl_dir.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("MPLCONFIGDIR", str(_mpl_dir))
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
-import seaborn as sns
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
-
-_PALETTE = "muted"
-# Use set_style + set_palette instead of set_theme — set_theme resets ALL rcParams
-# including font.family, which destroys japanize_matplotlib's monkey patch.
-sns.set_style("whitegrid", {
-    "grid.alpha": 0.3,
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-})
-sns.set_palette(_PALETTE)
-# Japanese font: import japanize_matplotlib for its monkey-patch,
-# then explicit addfont via shared module for Linux containers.
-import japanize_matplotlib  # noqa: F401
-from presentation.font_init import register_japanese_font
-register_japanese_font()
-from matplotlib import rcParams as _rc
-_rc.update({
-    "axes.titlesize": 14,
-    "axes.titlepad": 14,
-    "axes.labelsize": 11,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
-    "legend.fontsize": 9,
-    "axes.unicode_minus": False,
-})
-
-_FIG_W, _FIG_H = 10, 6
-_DPI = 160
 
 _CHART_SPEC_PROMPT = """You are a data visualization expert. Given column info, sample data, and the user's original question, decide the best chart type and return a JSON spec.
 
@@ -133,19 +90,22 @@ def generate_chart(
 
         logger.info(f"Chart spec from LLM: {spec}")
 
-        df = _to_df(column_names, data_array, column_types)
-        fig = _render(df, spec)
-        if fig is None:
-            return None
+        from presentation.chart_renderer import render_to_bytes
 
-        fig.tight_layout()
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=_DPI, bbox_inches="tight", facecolor="white")
-        plt.close(fig)
-        buf.seek(0)
-        return buf.read()
+        # Build DataFrame with proper type coercion
+        numeric_types = {"INT", "LONG", "FLOAT", "DOUBLE", "DECIMAL", "SHORT", "BYTE", "BIGINT", "SMALLINT", "TINYINT"}
+        date_types = {"DATE", "TIMESTAMP", "TIMESTAMP_NTZ"}
+        df = pd.DataFrame(data_array, columns=column_names)
+        for i, ct in enumerate(column_types):
+            tn = ct.get("type_name", "").upper()
+            col = column_names[i]
+            if tn in numeric_types:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            elif tn in date_types:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+
+        return render_to_bytes(df, spec)
     except Exception as e:
-        plt.close("all")
         logger.error(f"Chart generation failed: {e}", exc_info=True)
         return None
 
@@ -179,187 +139,3 @@ Sample data ({len(data_array)} rows total, showing first {len(sample)}):
     except Exception as e:
         logger.error(f"LLM chart spec failed: {e}")
         return None
-
-
-def _to_df(column_names, data_array, column_types):
-    numeric_types = {"INT", "LONG", "FLOAT", "DOUBLE", "DECIMAL", "SHORT", "BYTE", "BIGINT", "SMALLINT", "TINYINT"}
-    date_types = {"DATE", "TIMESTAMP", "TIMESTAMP_NTZ"}
-    df = pd.DataFrame(data_array, columns=column_names)
-    for i, ct in enumerate(column_types):
-        tn = ct.get("type_name", "").upper()
-        col = column_names[i]
-        if tn in numeric_types:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        elif tn in date_types:
-            df[col] = pd.to_datetime(df[col], errors="coerce")
-    return df
-
-
-def _fmt_axis(ax, axis="y"):
-    fmt = ticker.FuncFormatter(lambda x, _: f"{x:,.0f}")
-    if axis in ("y", "both"):
-        ax.yaxis.set_major_formatter(fmt)
-    if axis in ("x", "both"):
-        ax.xaxis.set_major_formatter(fmt)
-
-
-def _render(df: pd.DataFrame, spec: dict) -> Optional[plt.Figure]:
-    chart_type = spec.get("type", "none")
-    x = spec.get("x")
-    y = spec.get("y")
-    y2 = spec.get("y2")
-    hue = spec.get("hue")
-    sort_order = spec.get("sort", "none")
-    title = spec.get("title")
-
-    if not x or not y or x not in df.columns or y not in df.columns:
-        return None
-    if hue and hue not in df.columns:
-        hue = None
-    if y2 and y2 not in df.columns:
-        y2 = None
-
-    # Normalize sort value (LLM sometimes returns "column_desc" instead of "desc")
-    if sort_order and "desc" in str(sort_order).lower():
-        df = df.sort_values(y, ascending=False)
-    elif sort_order and "asc" in str(sort_order).lower():
-        df = df.sort_values(y, ascending=True)
-
-    fig, ax = plt.subplots(figsize=(_FIG_W, _FIG_H))
-
-    # --- bar ---
-    if chart_type == "bar":
-        palette = sns.color_palette("YlGnBu_r", n_colors=len(df))
-        sns.barplot(data=df, x=x, y=y, palette=palette, edgecolor="white", linewidth=0.6, ax=ax)
-        for i, v in enumerate(df[y]):
-            if pd.notna(v):
-                ax.text(i, v, f"{v:,.0f}", ha="center", va="bottom", fontsize=9, color="#333")
-        _fmt_axis(ax)
-        plt.xticks(rotation=45, ha="right")
-
-    # --- hbar ---
-    elif chart_type == "hbar":
-        plt.close(fig)
-        fig, ax = plt.subplots(figsize=(_FIG_W, max(6, len(df) * 0.45)))
-        palette = sns.color_palette("YlGnBu_r", n_colors=len(df))
-        sns.barplot(data=df, x=y, y=x, palette=palette, edgecolor="white", linewidth=0.6, orient="h", ax=ax)
-        for i, v in enumerate(df[y]):
-            if pd.notna(v):
-                ax.text(v, i, f"  {v:,.0f}", va="center", fontsize=9, color="#333")
-        _fmt_axis(ax, axis="x")
-
-    # --- line ---
-    elif chart_type == "line":
-        sns.lineplot(data=df, x=x, y=y, marker="o", markersize=6, linewidth=2.2, ax=ax)
-        _fmt_axis(ax)
-        plt.xticks(rotation=45, ha="right")
-
-    # --- multiline ---
-    elif chart_type == "multiline":
-        if not hue:
-            plt.close(fig)
-            return None
-        sns.lineplot(data=df, x=x, y=y, hue=hue, marker="o", markersize=6, linewidth=2.2, ax=ax)
-        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=5, frameon=False)
-        _fmt_axis(ax)
-        plt.xticks(rotation=45, ha="right")
-
-    # --- area ---
-    elif chart_type == "area":
-        if hue:
-            # Stacked area by category
-            pivot = df.pivot_table(index=x, columns=hue, values=y, aggfunc="sum").fillna(0)
-            pivot.plot.area(ax=ax, alpha=0.7, linewidth=1.5)
-            ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=5, frameon=False)
-        else:
-            ax.fill_between(range(len(df)), df[y], alpha=0.3, color=sns.color_palette(_PALETTE)[0])
-            ax.plot(range(len(df)), df[y], marker="o", markersize=5, linewidth=2, color=sns.color_palette(_PALETTE)[0])
-            ax.set_xticks(range(len(df)))
-            ax.set_xticklabels(df[x], rotation=45, ha="right")
-        ax.set_ylabel(y)
-        _fmt_axis(ax)
-
-    # --- stacked_bar ---
-    elif chart_type == "stacked_bar":
-        if not hue:
-            plt.close(fig)
-            return None
-        pivot = df.pivot_table(index=x, columns=hue, values=y, aggfunc="sum").fillna(0)
-        pivot.plot.bar(stacked=True, ax=ax, edgecolor="white", linewidth=0.5)
-        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=5, frameon=False)
-        _fmt_axis(ax)
-        plt.xticks(rotation=45, ha="right")
-
-    # --- grouped_bar ---
-    elif chart_type == "grouped_bar":
-        if not hue:
-            plt.close(fig)
-            return None
-        sns.barplot(data=df, x=x, y=y, hue=hue, edgecolor="white", linewidth=0.8, ax=ax)
-        ax.legend(frameon=False, fontsize=9)
-        _fmt_axis(ax)
-        plt.xticks(rotation=45, ha="right")
-
-    # --- donut ---
-    elif chart_type == "donut":
-        plt.close(fig)
-        fig, ax = plt.subplots(figsize=(7, 7))
-        values = df[y].tolist()
-        labels = df[x].tolist()
-        total = sum(v for v in values if pd.notna(v))
-        colors = sns.color_palette(_PALETTE, len(labels))
-        ax.pie(
-            values, labels=labels, autopct="%1.1f%%", colors=colors,
-            pctdistance=0.78,
-            wedgeprops=dict(width=0.38, edgecolor="white", linewidth=2),
-            textprops=dict(fontsize=11),
-        )
-        ax.text(0, 0, f"{total:,.0f}", ha="center", va="center", fontsize=18, fontweight="bold", color="#333")
-
-    # --- scatter ---
-    elif chart_type == "scatter":
-        if hue:
-            sns.scatterplot(data=df, x=x, y=y, hue=hue, s=100, alpha=0.75, edgecolor="white", linewidth=1, ax=ax)
-        else:
-            sns.scatterplot(data=df, x=x, y=y, s=100, alpha=0.75, edgecolor="white", linewidth=1, ax=ax)
-        _fmt_axis(ax, axis="both")
-
-    # --- histogram ---
-    elif chart_type == "histogram":
-        sns.histplot(data=df, x=x, bins="auto", kde=True, edgecolor="white", linewidth=0.5, ax=ax)
-        _fmt_axis(ax)
-
-    # --- dual_axis ---
-    elif chart_type == "dual_axis":
-        if not y2:
-            plt.close(fig)
-            return None
-        color1 = sns.color_palette(_PALETTE)[0]
-        color2 = sns.color_palette(_PALETTE)[1]
-
-        ax.plot(range(len(df)), df[y], marker="o", color=color1, linewidth=2, label=y)
-        ax.set_ylabel(y, color=color1)
-        ax.tick_params(axis="y", labelcolor=color1)
-        _fmt_axis(ax)
-
-        ax2 = ax.twinx()
-        ax2.plot(range(len(df)), df[y2], marker="s", color=color2, linewidth=2, label=y2)
-        ax2.set_ylabel(y2, color=color2)
-        ax2.tick_params(axis="y", labelcolor=color2)
-        ax2.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
-
-        ax.set_xticks(range(len(df)))
-        ax.set_xticklabels(df[x], rotation=45, ha="right")
-
-        lines1, labels1 = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left", frameon=False)
-
-    else:
-        plt.close(fig)
-        return None
-
-    if title:
-        ax.set_title(title, fontweight="bold", fontsize=14)
-
-    return fig

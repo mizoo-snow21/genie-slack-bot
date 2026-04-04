@@ -84,6 +84,12 @@ Auto-created by `infra/init_tables.py` in `{RESEARCH_CATALOG}.genie_research`:
 - Chart title now reflects sub-question context and color/grouping axis (not just y-axis measure)
 - **Remaining risk**: Temporal override only fires when chart LLM initially chose bar/hbar; if LLM chose scatter/pie, the override does not apply
 
+### Chart generator unification (next step)
+- `chart_renderer.py` で描画は統合済み（15チャートタイプ）
+- `chart_generator_quick.py`（関数ベース、同期 LLM 直叩き）と `chart_generator.py`（クラスベース、async LLMClient 経由）が別ファイルで残っている
+- 両方とも「LLM にスペック生成 → render_to_bytes 呼ぶ」の同じ流れだがインターフェースが異なる
+- **Next step**: `chart_spec_client.py`（スペック取得）+ 統合 `chart_generator.py`（spec → render → optional Volume 保存）に再構成。呼び出し側（slack_handler, orchestrator）の変更が必要
+
 ## Testing
 
 ```bash

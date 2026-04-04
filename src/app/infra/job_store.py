@@ -53,6 +53,17 @@ class JobStore:
         rows = resp.get("result", {}).get("data_array", [])
         return [dict(zip(columns, row)) for row in rows]
 
+    def get_old_job_ids(self, cutoff_str: str, limit: int = 50) -> list[str]:
+        """Return job_ids for terminal jobs created before cutoff."""
+        table = Config.table_name("research_jobs")
+        rows = self._query_rows(
+            f"SELECT job_id FROM {table} "
+            f"WHERE created_at < :cutoff AND status IN ('completed', 'failed', 'cancelled') "
+            f"LIMIT {limit}",
+            [{"name": "cutoff", "value": cutoff_str, "type": "STRING"}],
+        )
+        return [r["job_id"] for r in rows]
+
     def create_job(
         self,
         space_id: str,
