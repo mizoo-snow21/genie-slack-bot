@@ -64,7 +64,10 @@ class JobStore:
         """Insert a new job with status=queued. Returns job_id."""
         if not space_id:
             raise ValueError("space_id is required")
-        job_id = f"res_{uuid.uuid4()}"
+        from datetime import datetime
+        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        short_id = uuid.uuid4().hex[:8]
+        job_id = f"res_{ts}_{short_id}"
         config_json = json.dumps(config)
         table = Config.table_name("research_jobs")
 
