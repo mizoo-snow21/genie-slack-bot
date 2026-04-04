@@ -15,15 +15,21 @@ _JSON_RULE = "Return one JSON object only. No leading/trailing text, no markdown
 
 PLAN_SYSTEM_PROMPT_TEMPLATE = """You are a senior data analyst planning a multi-step research investigation. Given a user's question, decompose it into exactly {n} sub-questions that each produce a single SQL query.
 
-Your PRIMARY goal is analytical quality — design questions that build a compelling, layered argument answering the user's question. Visualization diversity is secondary and handled downstream.
+## Schema constraint (HIGHEST PRIORITY)
+If a data source reference is provided, it is the ONLY source of truth for available data.
+- You MUST use ONLY the exact column names listed in the schema. Do NOT invent, paraphrase, or assume columns that are not explicitly listed.
+- Do NOT use generic business terms (e.g., "商品カテゴリ", "product category", "customer segment") unless they appear verbatim as column names in the schema.
+- Questions referencing non-existent columns WILL FAIL with no recovery.
+- Before finalizing each question, verify: "Does every column I reference exist in the schema?" If not, rewrite.
 
 ## Approach: Overview first, then hypothesis-driven drill-down
 
-**Question 1 — Overview**: Capture the full picture. A broad aggregation across the primary dimension that reveals the overall shape (rankings, totals, averages across all groups).
+**Question 1 — Overview**: A broad aggregation across the primary dimension that reveals the overall shape (rankings, totals, averages across all groups).
 
-**Questions 2 to {n_minus_1} — Hypothesis-driven drill-downs**: Anticipate the most likely pattern from the overview (e.g., one group dominates, clear gradient). Form hypotheses about WHY, and design each question to test a different one.
+**Questions 2 to {n_minus_1} — Hypothesis-driven drill-downs**: Anticipate the most likely pattern from the overview. Form hypotheses about WHY, and design each question to test a different one.
+If a date/time column exists in the schema, one drill-down MUST analyze trends over time.
 
-**Question {n} — Control for confounding factors**: The last question MUST cross-tabulate TWO or more dimensions to test whether the patterns from earlier questions hold after controlling for a confounding variable. This is the most analytically valuable question — it separates correlation from causation.
+**Question {n} — Control for confounding factors**: The last question MUST cross-tabulate TWO or more dimensions to test whether the patterns from earlier questions hold after controlling for a confounding variable.
 
 Example pattern:
 - Q1: "Total Y by primary dimension" (overview)
@@ -34,12 +40,6 @@ Example pattern:
 Each drill-down question must:
 - Target a DIFFERENT explanatory dimension (do not reuse the same grouping columns)
 - Test a specific "why" or "what drives this" — not just slice the same data differently
-
-## Schema hints
-If a data source reference is provided, use it to design better questions:
-- If a **date/month/year column** exists, include at least one question that analyzes **trends over time** (e.g., monthly or yearly changes)
-- If **multiple categorical dimensions** exist (e.g., region + category + sub-category), use the cross-tabulation question to combine two of them
-- Prefer columns that exist in the schema — questions about unavailable columns will fail
 
 Rules:
 - Return exactly {n} sub-questions as a JSON array of non-empty strings, no duplicates
@@ -97,75 +97,6 @@ Rules:
 Examples:
 {{"action": "continue", "reason": "Region A dominates disproportionately — need to check if this holds after controlling for category", "new_questions": ["question motivated by data", "question to explain finding"]}}
 {{"action": "synthesize", "reason": "All major angles covered, no standout anomalies requiring deeper analysis"}}"""
-
-CHART_SPEC_SYSTEM_PROMPT = """You are a data visualization expert. Choose the chart that best communicates the data's key message.
-
-First, ask yourself: "What is the ONE thing this chart should communicate?"
-Then select the chart type that makes that message IMMEDIATELY visible.
-
-Selection rules (check in order, use the FIRST match):
-
-1. **line** — if x-axis represents time (dates, months, quarters, years) and there is ONE series. Shows trends over time.
-
-2. **multiline** — if x-axis represents time AND a categorical column can group multiple series. Requires hue/color_column.
-
-3. **area** — like line but filled. Good for cumulative totals, volume over time, or emphasizing magnitude.
-
-4. **pie** — if the data shows composition/share with 2-7 categories and values represent parts of a whole. Full circle chart.
-
-5. **donut** — same as pie but displayed as a ring with total in center. Use when you want to emphasize the total alongside proportions.
-
-6. **scatter** — if the QUESTION asks about the relationship between two continuous measurements AND both x and y are numeric.
-
-7. **bubble** — like scatter but with a third numeric dimension shown as point size. Use y2 for the size column. Best when 3 numeric columns are available.
-
-8. **boxplot** — if each category has multiple raw (non-aggregated) rows and the goal is to show distribution/spread.
-
-9. **heatmap** — if the data has TWO categorical columns and ONE numeric column, forming a matrix. Color intensity shows magnitude. Use x for one dimension, color_column for the other, y for the numeric value.
-
-10. **stacked_bar** — if the data shows composition across multiple groups with a color breakdown. Best for parts-of-whole comparison.
-
-11. **grouped_bar** — side-by-side bars for comparing 2-3 measures with similar scales across categories. Requires hue/color_column.
-
-12. **histogram** — distribution of a single numeric column. Set x to the numeric column.
-
-13. **dual_axis** — two measures with different scales over the same x-axis. y = left axis, y2 = right axis.
-
-14. **bar** — if x-axis has a natural order or few categories (≤12) with short labels. Vertical bars.
-
-15. **hbar** — for everything else: rankings, comparisons across many categories, long labels. This is the FALLBACK, not the default.
-
-IMPORTANT: Do NOT default to hbar. Actively look for reasons to use line, multiline, area, pie, donut, scatter, bubble, heatmap, bar, or other types first. Use hbar only when no other type fits better.
-
-Rules:
-- x_column and y_column MUST be column names that exist in the provided column list
-- x_column = categorical or first variable, y_column = numeric measure
-- color_column is optional — use only when ≤ 8 distinct values AND chart_type supports grouping (bar, hbar, line, multiline, scatter, grouped_bar, stacked_bar)
-- Title MUST be in the SAME LANGUAGE as the user's question (not the column names)
-- Title must reflect the SPECIFIC analytical angle of the question — include the grouping/color axis, not just the y-axis measure
-- If a color_column or grouping axis is present, mention it in the title (e.g., "カテゴリ別の地域別売上" not just "地域別売上")
-- If you cannot produce a natural title, return empty string
-- sort: "desc" (highest first), "asc" (lowest first, or natural order like age bands/time), or "none" (keep original order). Choose the sort that makes the chart's message clearest.
-
-{json_rule}
-Examples:
-{{"chart_type": "line", "x_column": "month", "y_column": "avg_value", "title": "月別平均値推移", "color_column": null, "sort": "none"}}
-{{"chart_type": "multiline", "x_column": "month", "y_column": "value", "title": "月別カテゴリ別推移", "color_column": "category", "sort": "none"}}
-{{"chart_type": "area", "x_column": "month", "y_column": "cumulative", "title": "累計推移", "color_column": null, "sort": "none"}}
-{{"chart_type": "pie", "x_column": "segment", "y_column": "share", "title": "セグメント構成比", "color_column": null, "sort": "desc"}}
-{{"chart_type": "donut", "x_column": "segment", "y_column": "share", "title": "セグメント構成比", "color_column": null, "sort": "desc"}}
-{{"chart_type": "scatter", "x_column": "metric_a", "y_column": "metric_b", "title": "指標Aと指標Bの関係", "color_column": "category", "sort": "none"}}
-{{"chart_type": "bubble", "x_column": "metric_a", "y_column": "metric_b", "title": "3指標の関係", "color_column": "category", "y2_column": "metric_c", "sort": "none"}}
-{{"chart_type": "boxplot", "x_column": "category", "y_column": "value", "title": "カテゴリ別値分布", "color_column": null, "sort": "none"}}
-{{"chart_type": "heatmap", "x_column": "sub_category", "y_column": "avg_value", "title": "カテゴリ×サブカテゴリ別平均値", "color_column": "category", "sort": "none"}}
-{{"chart_type": "stacked_bar", "x_column": "group", "y_column": "count", "title": "グループ別構成比", "color_column": "type", "sort": "none"}}
-{{"chart_type": "grouped_bar", "x_column": "category", "y_column": "value", "title": "カテゴリ別比較", "color_column": "group", "sort": "none"}}
-{{"chart_type": "histogram", "x_column": "amount", "y_column": "amount", "title": "金額分布", "color_column": null, "sort": "none"}}
-{{"chart_type": "dual_axis", "x_column": "month", "y_column": "count", "title": "件数と平均値の推移", "color_column": null, "y2_column": "avg_value", "sort": "none"}}
-{{"chart_type": "bar", "x_column": "age_band", "y_column": "count", "title": "年齢帯別件数", "color_column": "type", "sort": "asc"}}
-{{"chart_type": "hbar", "x_column": "group", "y_column": "revenue", "title": "グループ別売上", "color_column": null, "sort": "desc"}}
-
-Only skip if no numeric column: {{"skip": true}}"""
 
 NARRATIVE_SYSTEM_PROMPT = """You are a senior data analyst writing a polished research report for business stakeholders.
 
@@ -231,7 +162,6 @@ class LLMClient:
     def __init__(self, ws: WorkspaceClient):
         self._ws = ws
         self._endpoint = Config.LLM_RESEARCH_ENDPOINT
-        self._chart_endpoint = Config.LLM_CHART_ENDPOINT
         self._narrative_endpoint = Config.LLM_NARRATIVE_ENDPOINT
 
     @staticmethod
@@ -274,23 +204,6 @@ class LLMClient:
             },
         )
         return self._extract_response_text(resp, self._endpoint)
-
-    async def _call_chart(self, system: str, user: str, max_tokens: int = 200) -> str:
-        """Call lightweight LLM for chart spec generation."""
-        resp = await asyncio.to_thread(
-            self._ws.api_client.do,
-            "POST",
-            f"/serving-endpoints/{self._chart_endpoint}/invocations",
-            body={
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "max_tokens": max_tokens,
-                "temperature": 0,
-            },
-        )
-        return self._extract_response_text(resp, self._chart_endpoint)
 
     async def _call_narrative(self, system: str, user: str, max_tokens: int = 4000) -> str:
         """Call narrative LLM endpoint (Opus) for report generation.
@@ -339,45 +252,22 @@ class LLMClient:
         column_profile: list[dict] | None = None,
         question: str | None = None,
     ) -> Optional[dict]:
-        """Generate a chart spec from column metadata and sample data."""
-        col_desc = json.dumps(columns, ensure_ascii=False)
-        rows_desc = json.dumps(sample_rows[:5], ensure_ascii=False)
-        user_msg = ""
-        if question:
-            user_msg += f"Question: {question}\n"
-        user_msg += f"Columns: {col_desc}\nSample rows (first 5): {rows_desc}"
-        if column_profile:
-            profile_desc = json.dumps(column_profile, ensure_ascii=False)
-            user_msg += f"\nColumn profile (sample-based): {profile_desc}"
+        """Generate a chart spec from column metadata and sample data.
 
-        prompt = CHART_SPEC_SYSTEM_PROMPT.format(json_rule=_JSON_RULE)
-        try:
-            text = await self._call_chart(prompt, user_msg, max_tokens=200)
-        except Exception as e:
-            logger.warning(
-                f"Chart endpoint failed ({self._chart_endpoint}), falling back to primary: {e}"
-            )
-            try:
-                text = await self._call(prompt, user_msg, max_tokens=200)
-            except Exception:
-                return None
-        try:
-            spec = json.loads(text)
-            if spec.get("skip"):
-                return None
-            return spec
-        except json.JSONDecodeError:
-            extracted = self._extract_json(text)
-            if extracted:
-                try:
-                    spec = json.loads(extracted)
-                    if spec.get("skip"):
-                        return None
-                    return spec
-                except json.JSONDecodeError:
-                    pass
-            logger.error(f"Failed to parse chart spec JSON: {text[:200]}")
-            return None
+        Delegates to ``infra.chart_spec_client.get_chart_spec`` (synchronous)
+        via ``asyncio.to_thread``.  Returns a canonical spec dict with keys
+        ``type, x, y, y2, hue, sort, title``, or None.
+        """
+        from infra.chart_spec_client import get_chart_spec
+
+        return await asyncio.to_thread(
+            get_chart_spec,
+            self._ws,
+            columns,
+            sample_rows,
+            column_profile=column_profile,
+            question=question,
+        )
 
     async def generate_plan(self, question: str, schema_info: str = "") -> list[str]:
         """Generate research sub-questions from user question."""

@@ -1,7 +1,7 @@
 """Delta table CRUD for research_steps and research_reports."""
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from databricks.sdk import WorkspaceClient
@@ -147,6 +147,23 @@ class StepStore:
             """,
             [
                 {"name": "chart_path", "value": chart_volume_path, "type": "STRING"},
+                {"name": "job_id", "value": job_id, "type": "STRING"},
+                {"name": "step_id", "value": step_id, "type": "STRING"},
+            ],
+        )
+
+    def update_step_sample(self, job_id: str, step_id: str, sample: list[list]):
+        """Update result_sample for a completed step (e.g. after sorting)."""
+        import json as _json
+        table = Config.table_name("research_steps")
+        self._execute_sql(
+            f"""
+            UPDATE {table}
+            SET result_sample = :sample
+            WHERE job_id = :job_id AND step_id = :step_id
+            """,
+            [
+                {"name": "sample", "value": _json.dumps(sample, ensure_ascii=False), "type": "STRING"},
                 {"name": "job_id", "value": job_id, "type": "STRING"},
                 {"name": "step_id", "value": step_id, "type": "STRING"},
             ],

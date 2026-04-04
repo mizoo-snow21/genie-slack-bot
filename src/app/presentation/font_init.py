@@ -1,6 +1,6 @@
 """Shared Japanese font registration for matplotlib on Linux containers.
 
-Both chart_generator.py and chart_generator_quick.py need Japanese fonts.
+chart_generator.py and chart_renderer.py need Japanese fonts.
 This module consolidates the registration logic: import japanize_matplotlib
 for its monkey-patch, then explicitly addfont as a belt-and-suspenders
 measure for containers where the auto-patch doesn't stick.

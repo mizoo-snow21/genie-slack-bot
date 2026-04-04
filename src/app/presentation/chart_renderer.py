@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 # --- Styling (no font setup here — font_init.py is the single source of truth) ---
 _PALETTE = "muted"
-_CHART_COLORS = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7"]
 # set_style BEFORE japanize_matplotlib import so font settings are not overwritten
 sns.set_style("whitegrid", {"grid.alpha": 0.3, "axes.spines.top": False, "axes.spines.right": False})
 sns.set_palette(_PALETTE)
@@ -72,6 +71,10 @@ def _fmt_axis(ax, axis="y"):
     fmt = ticker.FuncFormatter(lambda x, _: f"{x:,.0f}")
     if axis in ("y", "both"):
         ax.yaxis.set_major_formatter(fmt)
+        # Force integer ticks when all Y values are whole numbers
+        ymin, ymax = ax.get_ylim()
+        if ymax - ymin < 20:
+            ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
     if axis in ("x", "both"):
         ax.xaxis.set_major_formatter(fmt)
 

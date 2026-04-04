@@ -48,8 +48,11 @@ async def main():
     from infra.genie_client import GenieClient
     genie = GenieClient(ws, Config.DATABRICKS_GENIE_SPACE_ID)
 
-    # Quick-answer chart generator (separate file, no research deps)
-    from presentation.chart_generator_quick import generate_chart
+    # Chart generator — shared instance for both quick-answer and research
+    from infra.llm_client import LLMClient
+    from presentation.chart_generator import ChartGenerator
+    llm = LLMClient(ws)
+    chart_gen = ChartGenerator(llm_client=llm, ws=ws)
 
     # Research components (lazy, only if enabled)
     orchestrator = None
@@ -61,19 +64,15 @@ async def main():
         logger.info("Research mode enabled, initializing...")
         try:
             from infra.init_tables import init_tables
-            from infra.llm_client import LLMClient
             from infra.job_store import JobStore
             from infra.step_store import StepStore
-            from presentation.chart_generator import ChartGenerator
             from presentation.pdf_renderer import PdfRenderer
             from domain.orchestrator import ResearchOrchestrator
 
             init_tables(ws)
 
-            llm = LLMClient(ws)
             job_store = JobStore(ws)
             step_store = StepStore(ws)
-            chart_gen = ChartGenerator(llm_client=llm, ws=ws)
             pdf_renderer = PdfRenderer()
             orchestrator = ResearchOrchestrator(
                 job_store=job_store,
@@ -94,7 +93,7 @@ async def main():
         slack_signing_secret=Config.SLACK_SIGNING_SECRET,
         slack_app_token=Config.SLACK_APP_TOKEN,
         genie_client=genie,
-        chart_generator_func=generate_chart,
+        chart_generator=chart_gen,
         orchestrator=orchestrator,
         job_store=job_store,
         step_store=step_store,
