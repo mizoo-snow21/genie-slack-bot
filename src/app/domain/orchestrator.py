@@ -123,6 +123,7 @@ class ResearchOrchestrator:
             # For the parallel batch we count total failures (not "consecutive")
             # because execution order is non-deterministic.
             parallel_failures = 0
+            failed_questions = []
             for item in initial_results:
                 if isinstance(item, Exception):
                     logger.exception(f"Job {job_id}: parallel step exception: {item}")
@@ -139,6 +140,7 @@ class ResearchOrchestrator:
                     })
                 else:
                     parallel_failures += 1
+                    failed_questions.append(sq)
 
             step_counter = len(sub_questions)
 
@@ -167,7 +169,9 @@ class ResearchOrchestrator:
                 if not self._jobs.transition_status(job_id, "running_subquestion", "evaluating"):
                     return
 
-                evaluation = await self._llm.evaluate_progress(question, completed_summaries)
+                evaluation = await self._llm.evaluate_progress(
+                    question, completed_summaries, failed_questions=failed_questions,
+                )
 
                 if evaluation.get("action") == "continue":
                     new_qs = evaluation.get("new_questions", [])
@@ -325,12 +329,18 @@ class ResearchOrchestrator:
             if conv_id:
                 self._steps.update_step_running(job_id, step_id, conv_id)
 
-            # Extract data
-            result_data = result.get("result_data", {})
-            result_schema = result.get("result_schema", {})
+            # Extract data — result_data may be None if Genie answered
+            # with text only (no SQL generated for the question)
+            result_data = result.get("result_data") or {}
+            result_schema = result.get("result_schema") or {}
             data_array = result_data.get("data_array", [])
             columns = result_schema.get("columns", [])
             col_names = [c.get("name", "") for c in columns]
+
+            if not data_array or not columns:
+                logger.warning(f"Step {step_id}: Genie returned no data (text-only response)")
+                self._steps.update_step_failed(job_id, step_id)
+                return None
 
             # Use row_count from SQL statement API metadata (not len(data_array)
             # which may be a page fragment). Fall back to manifest total_row_count.

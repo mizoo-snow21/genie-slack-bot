@@ -84,6 +84,8 @@ Do NOT continue for these reasons:
 
 Follow-up questions must be clearly motivated by observed results AND directly help answer the original question — not just explore an interesting tangent.
 
+If failed questions are listed, consider whether their analytical angle is worth retrying from a different direction. A failed question means the data source could not generate SQL for it — suggest a simpler alternative that uses different columns to get at the same insight.
+
 Rules:
 - Maximum 2 new follow-up questions per evaluation
 - new_questions must be an array of non-empty strings in the same language as the original question
@@ -133,10 +135,10 @@ Examples:
 {{"chart_type": "line", "x_column": "month", "y_column": "avg_sales", "title": "月別平均売上推移", "color_column": null}}
 {{"chart_type": "bar", "x_column": "age_band", "y_column": "count", "title": "年齢帯別件数", "color_column": "type"}}
 {{"chart_type": "pie", "x_column": "segment", "y_column": "share", "title": "セグメント構成比", "color_column": null}}
-{{"chart_type": "hbar", "x_column": "city", "y_column": "revenue", "title": "都市別売上", "color_column": null}}
-{{"chart_type": "scatter", "x_column": "area", "y_column": "price", "title": "面積と価格", "color_column": "region"}}
+{{"chart_type": "hbar", "x_column": "group", "y_column": "revenue", "title": "グループ別売上", "color_column": null}}
+{{"chart_type": "scatter", "x_column": "metric_a", "y_column": "metric_b", "title": "指標Aと指標Bの関係", "color_column": "category"}}
 {{"chart_type": "boxplot", "x_column": "category", "y_column": "price", "title": "カテゴリ別価格分布", "color_column": null}}
-{{"chart_type": "heatmap", "x_column": "layout", "y_column": "avg_price", "title": "地域×間取り別平均価格", "color_column": "region"}}
+{{"chart_type": "heatmap", "x_column": "sub_category", "y_column": "avg_value", "title": "カテゴリ×サブカテゴリ別平均値", "color_column": "category"}}
 
 Only skip if no numeric column: {{"skip": true}}"""
 
@@ -432,7 +434,8 @@ class LLMClient:
         return fingerprints
 
     async def evaluate_progress(
-        self, original_question: str, step_summaries: list[dict]
+        self, original_question: str, step_summaries: list[dict],
+        failed_questions: list[str] | None = None,
     ) -> dict:
         """Evaluate whether to continue or synthesize."""
         steps_text = "\n".join(
@@ -455,12 +458,22 @@ class LLMClient:
             f"dims={{{', '.join(sorted(dims))}}} measures={{{', '.join(sorted(measures))}}}"
             for dims, measures in existing_fps
         )
+        failed_text = ""
+        if failed_questions:
+            failed_list = "\n".join(f"- {q}" for q in failed_questions)
+            failed_text = (
+                f"\n\nFailed questions (data source could not answer these):\n{failed_list}\n"
+                f"If the analytical angle of a failed question is important, suggest an ALTERNATIVE "
+                f"question that approaches the same insight from a different direction using available columns."
+            )
+
         user_msg = (
             f"Original question: {original_question}\n\n"
             f"Completed steps:\n{steps_text}\n\n"
             f"Column combinations already analyzed: {fps_text}\n"
             f"Do NOT suggest follow-up questions that reuse the SAME dimension AND measure columns. "
             f"Follow-ups that reuse dimensions with a DIFFERENT measure are acceptable (e.g., to investigate contradictions or missing drivers)."
+            f"{failed_text}"
         )
         text = await self._call(eval_prompt, user_msg, max_tokens=800)
         try:
