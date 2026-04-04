@@ -436,6 +436,7 @@ class LLMClient:
     async def evaluate_progress(
         self, original_question: str, step_summaries: list[dict],
         failed_questions: list[str] | None = None,
+        force_continue: bool = False,
     ) -> dict:
         """Evaluate whether to continue or synthesize."""
         steps_text = "\n".join(
@@ -461,11 +462,20 @@ class LLMClient:
         failed_text = ""
         if failed_questions:
             failed_list = "\n".join(f"- {q}" for q in failed_questions)
-            failed_text = (
-                f"\n\nFailed questions (data source could not answer these):\n{failed_list}\n"
-                f"If the analytical angle of a failed question is important, suggest an ALTERNATIVE "
-                f"question that approaches the same insight from a different direction using available columns."
-            )
+            if force_continue:
+                failed_text = (
+                    f"\n\nFailed questions (data source could not answer these):\n{failed_list}\n"
+                    f"IMPORTANT: You MUST return action=continue with alternative questions. "
+                    f"For each failed question, suggest a SIMPLER alternative that approaches "
+                    f"the same insight using different columns available in the data source. "
+                    f"Do NOT repeat the failed questions verbatim."
+                )
+            else:
+                failed_text = (
+                    f"\n\nFailed questions (data source could not answer these):\n{failed_list}\n"
+                    f"If the analytical angle of a failed question is important, suggest an ALTERNATIVE "
+                    f"question that approaches the same insight from a different direction using available columns."
+                )
 
         user_msg = (
             f"Original question: {original_question}\n\n"
@@ -488,6 +498,13 @@ class LLMClient:
                     return {"action": "synthesize"}
             else:
                 logger.error(f"Failed to parse evaluation JSON: {text[:200]}")
+                return {"action": "synthesize"}
+
+        # force_continue: override synthesize decision when retrying failed questions
+        if force_continue and result.get("action") != "continue":
+            logger.info(f"Evaluate wanted to {result.get('action')} but force_continue=True, keeping as synthesize (no valid alternatives)")
+            # If LLM didn't produce alternatives despite being asked, don't force
+            if not result.get("new_questions"):
                 return {"action": "synthesize"}
 
         # Log reason for debugging

@@ -161,16 +161,76 @@ class ResearchOrchestrator:
             # Parallel batch failures should NOT carry over.
             consecutive_failures = 0
 
-            # --- EVALUATE once after parallel batch ---
+            # --- AUTO-RETRY failed questions via Evaluate ---
+            # If any Plan questions failed (Genie couldn't generate SQL),
+            # ask Evaluate to generate alternatives before normal evaluation.
+            if failed_questions and step_counter < max_steps:
+                if not self._jobs.transition_status(job_id, "running_subquestion", "evaluating"):
+                    return
+
+                retry_eval = await self._llm.evaluate_progress(
+                    question, completed_summaries, failed_questions=failed_questions,
+                    force_continue=True,
+                )
+                retry_qs = retry_eval.get("new_questions", [])
+                for rq in retry_qs:
+                    if len(sub_questions) < max_steps:
+                        sub_questions.append(rq)
+                        new_step_id = f"s{len(sub_questions)}"
+                        self._steps.create_step(job_id, new_step_id, len(sub_questions), rq)
+                        logger.info(f"Job {job_id}: added retry question for failed step: {rq[:60]}")
+
+                # Execute retry questions sequentially
+                while step_counter < len(sub_questions) and step_counter < max_steps:
+                    if self._check_cancel(job_id):
+                        return
+                    if time.time() - start_time > max_duration:
+                        break
+
+                    step_id = f"s{step_counter + 1}"
+                    sq = sub_questions[step_counter]
+
+                    if not self._jobs.transition_status(job_id, "evaluating", "running_subquestion"):
+                        return
+
+                    augmented_question = self._inject_context(sq, completed_summaries)
+                    result = await self._execute_step(
+                        job_id, step_id, augmented_question, max_rows,
+                        config=config, start_time=start_time, max_duration=max_duration,
+                    )
+                    if result:
+                        completed_summaries.append({
+                            "step_id": step_id,
+                            "question": sq,
+                            "summary": result["summary"],
+                            "row_count": result.get("row_count", 0),
+                            "column_meta": result.get("column_meta", []),
+                        })
+
+                    step_counter += 1
+
+                    if step_counter < len(sub_questions):
+                        if not self._jobs.transition_status(job_id, "running_subquestion", "evaluating"):
+                            return
+
+                # Clear failed_questions — retries already attempted
+                failed_questions = []
+
+            # --- EVALUATE once after parallel batch (+ retries) ---
             if step_counter < max_steps and time.time() - start_time < max_duration:
                 if self._check_cancel(job_id):
                     return
 
-                if not self._jobs.transition_status(job_id, "running_subquestion", "evaluating"):
+                # Ensure we're in the right state for evaluate
+                job = self._jobs.get_job(job_id)
+                if job and job["status"] == "running_subquestion":
+                    if not self._jobs.transition_status(job_id, "running_subquestion", "evaluating"):
+                        return
+                elif job and job["status"] != "evaluating":
                     return
 
                 evaluation = await self._llm.evaluate_progress(
-                    question, completed_summaries, failed_questions=failed_questions,
+                    question, completed_summaries,
                 )
 
                 if evaluation.get("action") == "continue":
