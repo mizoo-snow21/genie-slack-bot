@@ -350,6 +350,20 @@ class ChartGenerator:
                 colors = _CHART_COLORS[:len(pie_data)]
                 ax.pie(pie_data[val_col], labels=pie_data[cat_col], autopct="%1.1f%%",
                        colors=colors, textprops={"fontsize": 9})
+            elif chart_type == "heatmap":
+                # Pivot: x_column = columns, color_column = rows, y_column = values
+                if hue and hue in df.columns:
+                    try:
+                        pivot = df.pivot_table(index=hue, columns=cat_col, values=val_col, aggfunc="mean")
+                        sns.heatmap(pivot, annot=True, fmt=".1f", cmap="Blues", ax=ax,
+                                    linewidths=0.5, cbar_kws={"label": val_col})
+                        ax.tick_params(axis="x", rotation=45, labelsize=9)
+                        ax.tick_params(axis="y", labelsize=9)
+                    except Exception as e:
+                        logger.warning(f"Heatmap pivot failed, falling back to bar: {e}")
+                        sns.barplot(data=df, x=cat_col, y=val_col, hue=hue, ax=ax)
+                else:
+                    sns.barplot(data=df, x=cat_col, y=val_col, hue=hue, ax=ax)
             else:
                 sns.barplot(data=df, x=cat_col, y=val_col, hue=hue, ax=ax)
 

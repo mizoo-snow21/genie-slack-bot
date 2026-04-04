@@ -44,14 +44,20 @@ class ReportRenderer:
             else:
                 column_profile = []
 
+            # Limit table display to top 10 rows for readability
+            max_display_rows = 10
+            display_rows = table_rows[:max_display_rows]
+            total_rows = step.get("result_row_count", len(table_rows))
+            is_truncated = step.get("result_is_truncated", False) or len(table_rows) > max_display_rows
+
             evidence.append({
                 "step_id": step["step_id"],
                 "step_number": i + 1,
                 "question": step.get("question", ""),
                 "columns": col_names,
-                "table_rows": table_rows,
-                "row_count": step.get("result_row_count", len(table_rows)),
-                "is_truncated": step.get("result_is_truncated", False),
+                "table_rows": display_rows,
+                "row_count": total_rows,
+                "is_truncated": is_truncated,
                 "sql": step.get("sql_query", ""),
                 "chart_volume_path": step.get("chart_volume_path"),
                 "column_profile": column_profile,

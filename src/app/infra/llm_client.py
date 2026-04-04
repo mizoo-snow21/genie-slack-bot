@@ -35,6 +35,12 @@ Each drill-down question must:
 - Target a DIFFERENT explanatory dimension (do not reuse the same grouping columns)
 - Test a specific "why" or "what drives this" — not just slice the same data differently
 
+## Schema hints
+If a data source reference is provided, use it to design better questions:
+- If a **date/month/year column** exists, include at least one question that analyzes **trends over time** (e.g., monthly or yearly changes)
+- If **multiple categorical dimensions** exist (e.g., region + category + sub-category), use the cross-tabulation question to combine two of them
+- Prefer columns that exist in the schema — questions about unavailable columns will fail
+
 Rules:
 - Return exactly {n} sub-questions as a JSON array of non-empty strings, no duplicates
 - Each sub-question must be self-contained and answerable independently
@@ -107,9 +113,11 @@ Selection rules (check in order, use the FIRST match):
 
 5. **bar** — if x-axis has a natural order (e.g., size bands, age bands) with short labels and few categories (≤8). Vertical bars show progression left-to-right.
 
-6. **hbar** — for everything else: rankings, comparisons across many categories, long labels. This is the FALLBACK, not the default.
+6. **heatmap** — if the data has TWO categorical columns and ONE numeric column, forming a matrix (e.g., category A × category B → value). Best for cross-tabulations where color intensity shows magnitude. Use x_column for one dimension, color_column for the other, y_column for the numeric value.
 
-IMPORTANT: Do NOT default to hbar. Actively look for reasons to use line, pie, bar, or scatter first. Use hbar only when no other type fits better.
+7. **hbar** — for everything else: rankings, comparisons across many categories, long labels. This is the FALLBACK, not the default.
+
+IMPORTANT: Do NOT default to hbar. Actively look for reasons to use line, pie, heatmap, bar, or scatter first. Use hbar only when no other type fits better.
 
 Rules:
 - x_column and y_column MUST be column names that exist in the provided column list
@@ -128,6 +136,7 @@ Examples:
 {{"chart_type": "hbar", "x_column": "city", "y_column": "revenue", "title": "都市別売上", "color_column": null}}
 {{"chart_type": "scatter", "x_column": "area", "y_column": "price", "title": "面積と価格", "color_column": "region"}}
 {{"chart_type": "boxplot", "x_column": "category", "y_column": "price", "title": "カテゴリ別価格分布", "color_column": null}}
+{{"chart_type": "heatmap", "x_column": "layout", "y_column": "avg_price", "title": "地域×間取り別平均価格", "color_column": "region"}}
 
 Only skip if no numeric column: {{"skip": true}}"""
 
