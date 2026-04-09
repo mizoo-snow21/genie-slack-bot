@@ -12,7 +12,11 @@ Databricks Apps 上で動作し、Socket Mode で Slack に接続する。
 - **リアルタイム進捗表示** — リサーチ中は現在の分析内容を Slack にリアルタイム更新
 - **フィードバック機能** — Helpful / Not Helpful ボタンで Genie API にフィードバック送信
 
-![Demo](docs/demo.gif)
+### ⚡ 即答モード
+![即答モード](docs/demo-instant.gif)
+
+### 🔬 リサーチモード
+![リサーチモード](docs/demo-research.gif)
 
 ## アーキテクチャ
 
